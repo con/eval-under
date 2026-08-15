@@ -1,0 +1,82 @@
+name: BeeGFS harness smoke test
+
+# Proves eval_under_beegfs works end-to-end on a real ubuntu-24.04 GH runner.
+# Not a git-annex regression test -- that lives in the drafts/ workflow which
+# is meant to be merged into datalad/git-annex.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/smoke.yaml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/smoke.yaml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"  # weekly Mon 05:17 UTC -- catches upstream image drift
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        beegfs-version: ["7.4.6"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BeeGFS client (DKMS) + utils
+        env:
+          BEEGFS_VERSION: ${{ matrix.beegfs-version }}
+        run: |
+          set -euo pipefail
+          codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-${codename}.list"
+          curl -fsI "$list_url" >/dev/null 2>&1 \
+            || list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-jammy.list"
+          sudo curl -fsSL "$list_url" -o /etc/apt/sources.list.d/beegfs.list
+          sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
+            -o /etc/apt/trusted.gpg.d/beegfs.asc
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dkms "linux-headers-$(uname -r)" \
+            beegfs-client-dkms beegfs-helperd beegfs-utils
+          modinfo beegfs
+
+      - name: Install git-annex
+        run: |
+          sudo apt-get install -y --no-install-recommends git-annex
+          git-annex version | head -3
+
+      - name: Smoke-test eval_under_beegfs
+        env:
+          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+        run: |
+          set -euo pipefail
+          sudo -E ./tools/eval_under_beegfs --set-home -- bash -eu -c '
+            echo "HOME=$HOME  TMPDIR=$TMPDIR"
+            mount | grep -F "$TMPDIR"
+            cd "$HOME"
+            git config --global user.email test@example.com
+            git config --global user.name  test
+            git init t
+            cd t
+            git annex init smoke
+            dd if=/dev/urandom of=big bs=1M count=10 status=none
+            git annex add big
+            git commit -m "add big"
+            git annex fsck
+            echo OK
+          '
+
+      - name: Container logs on failure
+        if: failure()
+        run: sudo docker compose -f beegfs/docker-compose.yml logs --tail=500 || true

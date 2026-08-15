@@ -1,0 +1,19 @@
+# Minimal beegfs-client.conf for the throwaway test cluster.
+# Full reference: /etc/beegfs/beegfs-client.conf shipped by beegfs-client-dkms.
+#
+# eval_under_beegfs writes this file to /etc/beegfs/beegfs-client-test.conf
+# and mounts with `-o cfgFile=/etc/beegfs/beegfs-client-test.conf`.
+
+sysMgmtdHost                 = 127.0.0.1
+connMgmtdPortTCP             = 8008
+connMgmtdPortUDP             = 8008
+connClientPortUDP            = 8004
+connHelperdPortTCP           = 8006
+
+# Throwaway test cluster — no auth. Do NOT copy this into any real deployment.
+connAuthFile                 =
+connDisableAuthentication    = true
+
+# Keep logs verbose enough to debug harness issues, quiet enough to not drown CI.
+logLevel                     = 3
+logType                      = syslog

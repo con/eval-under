@@ -1,0 +1,15 @@
+# Minimal beegfs-helperd.conf for the throwaway test cluster.
+# Schema is distinct from the client conf -- only the keys below are
+# recognised by helperd; client-only keys (sysMgmtdHost, ...) cause a
+# hard error if included.
+
+connAuthFile              =
+connDisableAuthentication = true
+connHelperdPortTCP        = 8006
+connPortShift             = 0
+logNoDate                 = false
+logNumLines               = 50000
+logNumRotatedFiles        = 5
+logStdFile                = /var/log/beegfs-helperd-test.log
+runDaemonized             = true
+tuneNumWorkers            = 2

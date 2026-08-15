@@ -1,0 +1,187 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code 2.1.63 / Claude Opus 4.7
+#
+# Evaluate a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally
+# HOME) pointing at a BeeGFS mount, backed by a containerised BeeGFS cluster
+# (mgmtd + meta + storage) brought up via docker compose.
+#
+# Modelled on datalad/datalad tools/eval_under_nfs -- same wrapper shape so
+# CI usage matches: `eval_under_beegfs -- timeout 3600 git annex test`.
+#
+# Usage:
+#   eval_under_beegfs [--keep] [--mount-point PATH] [--set-home] -- CMD [ARGS...]
+#
+#   --keep         skip teardown (leave containers + mount alive for debugging)
+#   --mount-point  where to mount BeeGFS on host (default /mnt/beegfs)
+#   --set-home     also set HOME=<mount-point>/home (mimics the git-annex
+#                  build-ubuntu.yaml `*-home` flavors)
+#
+# Env vars:
+#   BEEGFS_MOUNT         overrides --mount-point default (/mnt/beegfs)
+#   BEEGFS_DATA_ROOT     host dir for container-side target storage (/beegfs)
+#   BEEGFS_IMAGE_TAG     image tag for ghcr.io/thinkparq/beegfs-* (7.4.6)
+#   BEEGFS_STARTUP_WAIT  seconds to wait for mgmtd to become reachable (60)
+#
+# Exit code == command's exit code. Teardown runs on any exit.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+repo_root="$(cd "$here/.." && pwd)"
+
+MNT="${BEEGFS_MOUNT:-/mnt/beegfs}"
+DATA_ROOT="${BEEGFS_DATA_ROOT:-/beegfs}"
+COMPOSE="$repo_root/beegfs/docker-compose.yml"
+CONF_TEMPLATE="$repo_root/beegfs/beegfs-client.conf.template"
+CONF_ACTIVE="/etc/beegfs/beegfs-client-test.conf"
+HELPERD_TEMPLATE="$repo_root/beegfs/beegfs-helperd.conf.template"
+HELPERD_ACTIVE="/etc/beegfs/beegfs-helperd-test.conf"
+HELPERD_BIN="/opt/beegfs/sbin/beegfs-helperd"
+STARTUP_WAIT="${BEEGFS_STARTUP_WAIT:-60}"
+KEEP=0
+SET_HOME=0
+
+usage() {
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-2}"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    -h|--help) usage 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage 2 ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "no command given" >&2; usage 2; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || {
+    echo "must run as root (or have sudo available)" >&2; exit 2; }
+  SUDO=(sudo)
+  SUDO_E=(sudo -E)
+else
+  SUDO=()
+  SUDO_E=()
+fi
+
+log() { printf '\nI: %s\n' "$*"; }
+
+ensure_client_installed() {
+  if modinfo beegfs >/dev/null 2>&1; then return 0; fi
+  echo "ERROR: beegfs kernel module not available." >&2
+  echo "  Install with: apt install beegfs-client-dkms beegfs-helperd beegfs-utils" >&2
+  exit 3
+}
+
+start_cluster() {
+  log "creating data dirs under $DATA_ROOT"
+  "${SUDO[@]}" mkdir -p \
+    "$DATA_ROOT/mgmt_tgt_mgmt01" \
+    "$DATA_ROOT/meta_01_tgt_0101" \
+    "$DATA_ROOT/stor_01_tgt_101" \
+    "$DATA_ROOT/stor_01_tgt_102"
+
+  log "docker compose up (BeeGFS ${BEEGFS_IMAGE_TAG:-7.4.6})"
+  BEEGFS_DATA_ROOT="$DATA_ROOT" \
+  BEEGFS_IMAGE_TAG="${BEEGFS_IMAGE_TAG:-7.4.6}" \
+    "${SUDO_E[@]}" docker compose -f "$COMPOSE" up -d
+
+  log "waiting up to ${STARTUP_WAIT}s for mgmtd(8008) + meta(8005) + storage(8003)"
+  # All three must be listening AND meta must have registered with mgmtd
+  # (mount sanity check queries the root metadata node). Waiting on the
+  # meta TCP port is a reasonable proxy since meta binds after registering.
+  local waited=0
+  while [ "$waited" -lt "$STARTUP_WAIT" ]; do
+    local ports
+    ports=$("${SUDO[@]}" ss -ltn 2>/dev/null | awk '{print $4}' | awk -F: '{print $NF}')
+    if grep -qx 8008 <<<"$ports" \
+      && grep -qx 8005 <<<"$ports" \
+      && grep -qx 8003 <<<"$ports"; then
+      log "cluster is up (after ${waited}s)"
+      # Small extra grace period for meta to finish node registration.
+      sleep 2
+      return 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  echo "ERROR: cluster did not come up within ${STARTUP_WAIT}s" >&2
+  "${SUDO[@]}" docker compose -f "$COMPOSE" logs --tail=200 >&2 || true
+  exit 4
+}
+
+write_confs() {
+  log "writing $CONF_ACTIVE + $HELPERD_ACTIVE"
+  "${SUDO[@]}" install -d /etc/beegfs
+  "${SUDO[@]}" install -m 0644 "$CONF_TEMPLATE"    "$CONF_ACTIVE"
+  "${SUDO[@]}" install -m 0644 "$HELPERD_TEMPLATE" "$HELPERD_ACTIVE"
+}
+
+start_helperd() {
+  # The shipped systemd unit reads /etc/beegfs/beegfs-helperd.conf, which
+  # has auth enabled by default and would refuse to start. Bypass systemd
+  # and launch helperd directly with our test conf. runDaemonized=true in
+  # the conf means it forks and returns immediately.
+  log "starting beegfs-helperd (direct, cfgFile=$HELPERD_ACTIVE)"
+  "${SUDO[@]}" systemctl stop beegfs-helperd 2>/dev/null || true
+  "${SUDO[@]}" "$HELPERD_BIN" "cfgFile=$HELPERD_ACTIVE"
+  # Wait for port 8006 (timeout ~5s).
+  local w=0
+  while [ "$w" -lt 5 ]; do
+    if "${SUDO[@]}" ss -ltn "sport = :8006" 2>/dev/null | grep -q :8006; then
+      return 0
+    fi
+    sleep 1; w=$((w+1))
+  done
+  echo "ERROR: beegfs-helperd did not bind to tcp/8006" >&2
+  "${SUDO[@]}" tail -50 /var/log/beegfs-helperd-test.log 2>&1 >&2 || true
+  exit 5
+}
+
+mount_beegfs() {
+  log "mounting BeeGFS at $MNT"
+  "${SUDO[@]}" mkdir -p "$MNT"
+  "${SUDO[@]}" mount -t beegfs beegfs_nodev "$MNT" -o "cfgFile=$CONF_ACTIVE"
+  "${SUDO[@]}" chown "$(id -u):$(id -g)" "$MNT"
+  "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
+}
+
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving cluster + mount up (exit=$rc)"
+    return "$rc"
+  fi
+  log "teardown"
+  "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
+  "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  BEEGFS_DATA_ROOT="$DATA_ROOT" \
+    "${SUDO_E[@]}" docker compose -f "$COMPOSE" down -v 2>/dev/null || true
+  "${SUDO[@]}" rm -rf "$DATA_ROOT" "$CONF_ACTIVE" "$HELPERD_ACTIVE"
+  return "$rc"
+}
+trap teardown EXIT
+
+ensure_client_installed
+start_cluster
+write_confs
+start_helperd
+mount_beegfs
+
+RUN_HOME="$HOME"
+if [ "$SET_HOME" = 1 ]; then
+  RUN_HOME="$MNT/home"
+  mkdir -p "$RUN_HOME"
+fi
+
+log "running: $*"
+HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" "$@"

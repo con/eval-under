@@ -1,0 +1,82 @@
+# DRAFT: standalone job to drop into datalad/git-annex/.github/workflows/
+# as either a new file (test-beegfs.yaml) or a new job appended to
+# build-ubuntu.yaml alongside test-annex / test-annex-more.
+#
+# Design decision (see plan): kept as a separate job (not a matrix flavor)
+# because BeeGFS setup adds ~3-5 min of prep unrelated to the other flavors
+# and an independent failure signal is easier to triage.
+#
+# Depends on the same build-package job that test-annex uses -- reuses the
+# built .deb via download-artifact.
+#
+# When merging upstream:
+#   1. Copy this file to datalad/git-annex/.github/workflows/test-beegfs.yaml
+#      (or splice the `test-annex-beegfs:` job into build-ubuntu.yaml).
+#   2. Add eval_under_beegfs + beegfs/ dir to datalad/git-annex under
+#      .github/workflows/tools/  (mirroring the setup_crippledfs layout).
+#   3. Adjust the tools/ path in the `Run tests` step accordingly.
+
+name: Test git-annex on BeeGFS
+
+on:
+  workflow_dispatch:
+  # In-repo, this is usually chained after build-package via `needs:`.
+  # Left as workflow_dispatch here so the draft is standalone-runnable
+  # for validation via actionlint / act.
+
+jobs:
+  test-annex-beegfs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        beegfs-version: ["7.4.6"]
+        # When splicing into build-ubuntu.yaml, add `needs: build-package`
+        # and download the freshly-built .deb instead of installing from apt.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BeeGFS client (DKMS) + utils
+        env:
+          BEEGFS_VERSION: ${{ matrix.beegfs-version }}
+        run: |
+          set -euo pipefail
+          codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-${codename}.list"
+          curl -fsI "$list_url" >/dev/null 2>&1 \
+            || list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-jammy.list"
+          sudo curl -fsSL "$list_url" -o /etc/apt/sources.list.d/beegfs.list
+          sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
+            -o /etc/apt/trusted.gpg.d/beegfs.asc
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dkms "linux-headers-$(uname -r)" \
+            beegfs-client-dkms beegfs-helperd beegfs-utils
+          modinfo beegfs
+
+      # UPSTREAM CHANGE: replace this step with the existing pattern from
+      # build-ubuntu.yaml (download-artifact + dpkg -i git-annex*.deb).
+      - name: Install git-annex (apt; draft only)
+        run: |
+          sudo apt-get install -y --no-install-recommends git-annex
+          git annex version | head -5
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email test@github.land
+          git config --global user.name  "GitHub Almighty"
+
+      - name: Run git annex test under BeeGFS
+        env:
+          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+        # --set-home mirrors the *-home flavors in build-ubuntu.yaml
+        # (HOME on the tested FS; catches the class of bugs seen in
+        # git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/).
+        run: |
+          sudo -E ./tools/eval_under_beegfs --set-home -- \
+            timeout 3600 bash -c 'cd "$HOME" && git annex test'
+
+      - name: Container logs on failure
+        if: failure()
+        run: sudo docker compose -f beegfs/docker-compose.yml logs --tail=500 || true
