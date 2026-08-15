@@ -24,7 +24,11 @@ on:
 
 jobs:
   smoke:
-    runs-on: ubuntu-24.04
+    # ubuntu-22.04 ships kernel 5.15.x (GA) or 6.5.x (HWE), both within
+    # BeeGFS 7.4.x DKMS support. ubuntu-24.04 hosted runners currently
+    # ship kernel 6.17-azure which BeeGFS 7.4.6 cannot build against.
+    # Mirrors ThinkParQ/beegfs-csi-driver's runner choice.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     strategy:
       fail-fast: false

@@ -26,7 +26,10 @@ on:
 
 jobs:
   test-annex-beegfs:
-    runs-on: ubuntu-24.04
+    # ubuntu-22.04: BeeGFS 7.4.x DKMS builds fine against 22.04's kernels
+    # (5.15 GA / 6.5 HWE). ubuntu-24.04 hosted runners ship a newer
+    # -azure kernel that BeeGFS 7.4 cannot compile against.
+    runs-on: ubuntu-22.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
