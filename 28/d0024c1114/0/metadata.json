@@ -1,0 +1,240 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "28d0024c1114",
+  "session_id": "b53af811-8587-4d17-b3c7-310d06b804c6",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-15T22:48:46.088905171Z",
+  "branch": "master",
+  "checkpoints_count": 10,
+  "files_touched": [
+    ".github/workflows/smoke.yaml",
+    "README.md",
+    "Vagrantfile",
+    "beegfs/beegfs-client.conf.template",
+    "beegfs/beegfs-helperd.conf.template",
+    "beegfs/docker-compose.yml",
+    "drafts/git-annex-test-beegfs.yaml",
+    "provision/install-act.sh",
+    "provision/setup.sh",
+    "tools/eval_under_beegfs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "0f99119f5c9a",
+  "token_usage": {
+    "input_tokens": 252,
+    "cache_creation_tokens": 652949,
+    "cache_read_tokens": 23186476,
+    "output_tokens": 89867,
+    "api_call_count": 182
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-15T22:48:46.014303787Z",
+    "agent_lines": 730,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 730,
+    "total_lines_changed": 730,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 84,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 10,
+      "user_lines_removed": 0,
+      "agent_lines_added": 737,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 25,
+      "user_lines_removed": 0,
+      "agent_lines_added": 750,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 1,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 25,
+      "user_lines_removed": 0,
+      "agent_lines_added": 748,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 1,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 25,
+      "user_lines_removed": 0,
+      "agent_lines_added": 748,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 1,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 25,
+      "user_lines_removed": 0,
+      "agent_lines_added": 756,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 1,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 25,
+      "user_lines_removed": 0,
+      "agent_lines_added": 756,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 1,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 26,
+      "user_lines_removed": 0,
+      "agent_lines_added": 756,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 2,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 26,
+      "user_lines_removed": 0,
+      "agent_lines_added": 756,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 2,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 26,
+      "user_lines_removed": 0,
+      "agent_lines_added": 814,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 2,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 26,
+      "user_lines_removed": 0,
+      "agent_lines_added": 814,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".vagrant/machines/default/libvirt/action_provision": 1,
+        ".vagrant/machines/default/libvirt/box_meta": 1,
+        ".vagrant/machines/default/libvirt/created_networks": 2,
+        ".vagrant/machines/default/libvirt/creator_uid": 1,
+        ".vagrant/machines/default/libvirt/id": 1,
+        ".vagrant/machines/default/libvirt/index_uuid": 1,
+        ".vagrant/machines/default/libvirt/private_key": 8,
+        ".vagrant/machines/default/libvirt/synced_folders": 1,
+        ".vagrant/machines/default/libvirt/vagrant_cwd": 1,
+        ".vagrant/rgloader/loader.rb": 9
+      }
+    }
+  ]
+}

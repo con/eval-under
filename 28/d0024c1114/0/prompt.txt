@@ -1,0 +1,170 @@
+See https://github.com/ThinkParQ/beegfs-containers/issues/21 and references there in.  I would like to establish setup to test git-annex under beegfs as part of our https://github.com/con/git-annex/ build/testing.  Here -- establish a github workflow which would implement such a drill. Ideally we should develop something like https://github.com/datalad/datalad/blob/maint/tools/eval_under_nfs or https://github.com/datalad/datalad/blob/maint/tools/eval_under_testloopfs so we could potentially also test locally under beegfs and just use that script within ci to test similarly under there.  Since likely you would want access to docker to run testing locally to ensure all is working -- create overall design plan to estabish first vagrantfile solution to give you VM with necessary tooling (likely also with 'act' as well to test CI setup) to reach and test desired setup
+
+---
+
+there was timeout -- continue
+
+---
+
+I staged all the changes... vagrant does not start 
+
+❯ vagrant up
+Bringing machine 'default' up with 'libvirt' provider...
+==> default: Box 'generic/ubuntu2404' could not be found. Attempting to find and install...
+    default: Box Provider: libvirt
+    default: Box Version: >= 0
+The box 'generic/ubuntu2404' could not be found or
+could not be accessed in the remote catalog. If this is a private
+box on HashiCorp's Vagrant Cloud, please verify you're logged in via
+`vagrant login`. Also, please double-check the name. The expanded
+URL and error message are shown below:
+
+URL: ["https://vagrantcloud.com/api/v2/vagrant/generic/ubuntu2404"]
+Error: The requested URL returned error: 404
+
+---
+
+FWIW I am pretty sure we use libvirt there... but whatever -- running 'vagrant up', it is provisioning, vagrant ssh already works ... provisioning failed
+
+    default: Setting up docker-ce-cli (5:29.7.2-1~ubuntu.24.04~noble) ...
+    default: Setting up docker-ce (5:29.7.2-1~ubuntu.24.04~noble) ...
+    default: Created symlink /etc/systemd/system/multi-user.target.wants/docker.service → /usr/lib/systemd/system/docker.service.
+    default: Created symlink /etc/systemd/system/sockets.target.wants/docker.socket → /usr/lib/systemd/system/docker.socket.
+    default: Processing triggers for man-db (2.12.0-4build2) ...
+    default: 
+    default: Running kernel seems to be up-to-date.
+    default: 
+    default: No services need to be restarted.
+    default: 
+    default: No containers need to be restarted.
+    default: 
+    default: No user sessions are running outdated binaries.
+    default: 
+    default: No VM guests are running outdated hypervisor (qemu) binaries on this host.
+    default: Synchronizing state of docker.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
+    default: Executing: /usr/lib/systemd/systemd-sysv-install enable docker
+    default: 
+    default: === BeeGFS APT repo (v7.4) ===
+    default: curl: (22) The requested URL returned error: 404
+The SSH command responded with a non-zero exit status. Vagrant
+assumes that this means the command failed. The output for this command
+should be in the log above. Please read the output to determine what
+went wrong.
+vagrant up  5.25s user 1.85s system 7% cpu 1:31.26 total
+
+
+pick up from here if possible
+
+---
+
+running, monitor the progress and if finishes up ok (can you asssess that ?) then proceed with ensuring testing under beegfs working
+
+---
+
+provisioning seems finished, ssh and proceed with ensuring testing under beegfs working
+
+---
+
+check other sessions we worked with vagrant -- you should be able to just ssh inside of it . e.g. search up session under /home/yoh/proj/datalad_in_a_box/ (that path is NA atm).  The point is for you to ssh into vagrant box and ensure that all testing working
+
+---
+
+I did reload:
+
+❯ vagrant reload
+==> default: Attempting graceful shutdown of VM...
+==> default: Creating shared folders metadata...
+==> default: number of network adapters in current config (2) is different to attached interfaces (1), may have incorrectly updated
+==> default: Starting domain.
+==> default: Domain launching with graphics connection settings...
+==> default:  -- Graphics Port:      5900
+==> default:  -- Graphics IP:        127.0.0.1
+==> default:  -- Graphics Password:  Not defined
+==> default:  -- Graphics Websocket: 5700
+==> default: Waiting for domain to get an IP address...
+==> default: Waiting for machine to boot. This may take a few minutes...
+    default: SSH address: 192.168.121.88:22
+    default: SSH username: vagrant
+    default: SSH auth method: private key
+    default: Warning: Host unreachable. Retrying...
+    default: Warning: Connection refused. Retrying...
+==> default: Machine booted and ready!
+==> default: Rsyncing folder: /home/yoh/proj/beegfs-test/ => /vagrant
+==> default:   - Exclude: [".vagrant/", ".git/", ".datalad/"]
+==> default: Machine already provisioned. Run `vagrant provision` or use the `--provision`
+==> default: flag to force provisioning. Provisioners marked to run always will still run.
+
+---
+
+❯  vagrant ssh -c 'ip -4 -o addr; sudo systemctl status sshd --no-pager | head -8; ls /etc/netplan/'
+
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: ens5    inet 192.168.121.88/24 metric 100 brd 192.168.121.255 scope global dynamic ens5\       valid_lft 3540sec preferred_lft 3540sec
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+Unit sshd.service could not be found.
+50-cloud-init.yaml
+
+---
+
+I am doing that destroy and up and getting:
+
+❯  vagrant destroy -f && vagrant up
+==> default: Removing domain...
+==> default: Deleting the machine folder
+Bringing machine 'default' up with 'libvirt' provider...
+==> default: Checking if box 'cloud-image/ubuntu-24.04' version '20260814.0.0' is up to date...
+==> default: Created volume larger than box defaults, will require manual resizing of
+==> default: filesystems to utilize.
+==> default: Creating image (snapshot of base box volume).
+==> default: Creating domain with the following settings...
+==> default:  -- Name:              beegfs-test_default
+==> default:  -- Description:       Source: /home/yoh/proj/beegfs-test/Vagrantfile
+==> default:  -- Domain type:       kvm
+==> default:  -- Cpus:              4
+==> default:  -- Feature:           acpi
+==> default:  -- Feature:           apic
+==> default:  -- Feature:           pae
+==> default:  -- Clock offset:      utc
+==> default:  -- Memory:            6144M
+==> default:  -- Base box:          cloud-image/ubuntu-24.04
+==> default:  -- Storage pool:      default
+==> default:  -- Image(vda):        /var/lib/libvirt/images/beegfs-test_default.img, virtio, 30G
+==> default:  -- Disk driver opts:  cache='default'
+==> default:  -- Graphics Type:     vnc
+==> default:  -- Video Type:        cirrus
+==> default:  -- Video VRAM:        16384
+==> default:  -- Video 3D accel:    false
+==> default:  -- Keymap:            en-us
+==> default:  -- TPM Backend:       passthrough
+==> default:  -- INPUT:             type=mouse, bus=ps2
+==> default: Creating shared folders metadata...
+==> default: Updating domain definition due to configuration change
+==> default: Starting domain.
+==> default: Domain launching with graphics connection settings...
+==> default:  -- Graphics Port:      5900
+==> default:  -- Graphics IP:        127.0.0.1
+==> default:  -- Graphics Password:  Not defined
+==> default:  -- Graphics Websocket: 5700
+==> default: Waiting for domain to get an IP address...
+==> default: Waiting for machine to boot. This may take a few minutes...
+    default: SSH address: 192.168.121.217:22
+    default: SSH username: vagrant
+
+---
+
+❯ vagrant ssh -c 'ip -o -4 addr'
+
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: ens5    inet 192.168.121.217/24 metric 100 brd 192.168.121.255 scope global dynamic ens5\       valid_lft 3549sec preferred_lft 3549sec
+3: ens6    inet 172.28.128.50/24 brd 172.28.128.255 scope global ens6\       valid_lft forever preferred_lft forever
+4: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+
+---
+
+<task-notification>
+<task-id>bv55syqkc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-yoh-proj-beegfs-test/b53af811-8587-4d17-b3c7-310d06b804c6/tasks/bv55syqkc.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for git-annex test to finish inside VM" completed (exit code 0)</summary>
+</task-notification>
