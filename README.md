@@ -5,6 +5,20 @@ Development harness for testing git-annex (and, later, DataLad) under
 for iteration; the parts destined for upstream get PR'd to their real
 homes (see below).
 
+## CI status per BeeGFS version
+
+| Version | Status                                                                                                                                                             | Reproducer for #35 bug                    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- |
+| 7.4.6   | [![BeeGFS 7.4.6](https://github.com/yarikoptic/beegfs-test/actions/workflows/test-beegfs-7.4.6.yaml/badge.svg)](https://github.com/yarikoptic/beegfs-test/actions/workflows/test-beegfs-7.4.6.yaml) | yes — `renamePath: resource busy`         |
+| 8.1.0   | [![BeeGFS 8.1.0](https://github.com/yarikoptic/beegfs-test/actions/workflows/test-beegfs-8.1.0.yaml/badge.svg)](https://github.com/yarikoptic/beegfs-test/actions/workflows/test-beegfs-8.1.0.yaml) | TBD (harness still being validated on v8) |
+
+Each row runs the **full `git annex test`** against a fresh daily build
+from [con/git-annex](https://github.com/con/git-annex) on the pinned
+BeeGFS version. Matrix is currently limited to `7.4.6` and `8.1.0` — the
+intersection of "container image published on
+`ghcr.io/thinkparq/beegfs-*`" and "APT client-DKMS published on
+`beegfs.io`". More versions will light up as upstream fills the gaps.
+
 **Why**. A 2024 report of [35+ git-annex test failures on
 BeeGFS 7.4.6](https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/)
 tracked back to file-descriptor leakage across `rename()` — a class of bug
@@ -23,7 +37,8 @@ gets caught. Related upstream ask:
 | `beegfs/beegfs-client.conf.template`     | Minimal client conf pointing at localhost, no auth                            |
 | `beegfs/beegfs-helperd.conf.template`    | Minimal helperd conf (distinct schema from client)                            |
 | `tools/eval_under_beegfs`                | Wrapper: bring up cluster, mount, run cmd with `TMPDIR` on BeeGFS             |
-| `.github/workflows/beegfs-test.yaml`     | Matrix of BeeGFS versions, runs `git annex test` against con/git-annex daily  |
+| `.github/workflows/_test-beegfs.yaml`    | Reusable workflow: install client, fetch con/git-annex daily, run full test   |
+| `.github/workflows/test-beegfs-*.yaml`   | Per-version dispatchers (one per matrix cell) so each has its own badge URL   |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `datalad/git-annex`                                  |
 
 ## Local iteration (VM)

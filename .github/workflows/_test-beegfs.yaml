@@ -1,32 +1,20 @@
-name: git-annex test under BeeGFS
+name: (reusable) git-annex test under BeeGFS
 
-# Matrix of BeeGFS versions, each cell runs `git annex test` against a
-# fresh daily build fetched from con/git-annex. The purpose is to catch
-# BeeGFS-specific regressions in git-annex (rename semantics, close-on-
-# exec issues, etc.) -- see git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/
-# for the original class of bugs.
+# Reusable body: takes a specific BeeGFS version, installs matching
+# client + freshest con/git-annex daily, runs the full `git annex test`
+# under a containerised BeeGFS cluster.
+#
+# Invoked by per-version dispatcher workflows so each version gets its
+# own badge URL. (GitHub only exposes one badge per workflow file, not
+# per matrix cell.)
 
 on:
-  push:
-    branches: [main, master]
-    paths:
-      - "tools/**"
-      - "beegfs/**"
-      - "provision/**"
-      - ".github/workflows/beegfs-test.yaml"
-  pull_request:
-    paths:
-      - "tools/**"
-      - "beegfs/**"
-      - "provision/**"
-      - ".github/workflows/beegfs-test.yaml"
-  workflow_dispatch:
-  schedule:
-    - cron: "17 5 * * 1"  # Mon 05:17 UTC -- picks up new daily builds + image drift
-
-concurrency:
-  group: beegfs-test-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+    inputs:
+      beegfs-version:
+        description: "BeeGFS point version (e.g. 7.4.6, 8.1.0)"
+        required: true
+        type: string
 
 jobs:
   test:
@@ -38,23 +26,12 @@ jobs:
     permissions:
       contents: read
       actions: read  # to download artifacts from con/git-annex
-    strategy:
-      fail-fast: false
-      matrix:
-        # Constraints:
-        # - Container image tag must exist on ghcr.io/thinkparq/beegfs-mgmtd
-        #   (7.4.6 is the last 7.4.x image; 7.4.7 has APT client but no image).
-        # - APT client-dkms must exist for the same version on beegfs.io
-        #   (only 8.1.0 of the v8 line has APT; 8.2+ ships images only).
-        # So the intersection is {7.4.6, 8.1.0} until upstream fills the
-        # gaps.
-        beegfs-version: ["7.4.6", "8.1.0"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install BeeGFS client (DKMS) + utils
         env:
-          BEEGFS_VERSION: ${{ matrix.beegfs-version }}
+          BEEGFS_VERSION: ${{ inputs.beegfs-version }}
         run: |
           set -euo pipefail
           codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
@@ -65,8 +42,8 @@ jobs:
           sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
             -o /etc/apt/trusted.gpg.d/beegfs.asc
           sudo apt-get update -qq
-          # v8 dropped `beegfs-helperd` (functionality folded into `beegfs-client`)
-          # and renamed `beegfs-utils` -> `beegfs-tools`.
+          # v8 dropped `beegfs-helperd` (folded into `beegfs-client`) and
+          # renamed `beegfs-utils` -> `beegfs-tools`.
           major="${BEEGFS_VERSION%%.*}"
           if [ "$major" = "7" ]; then
             pkgs="beegfs-client-dkms beegfs-helperd beegfs-utils"
@@ -83,7 +60,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Find the most recent SUCCESSFUL "Build git-annex on Ubuntu" run.
           run_id=$(gh run list \
             --repo con/git-annex \
             --workflow "Build git-annex on Ubuntu" \
@@ -109,10 +85,7 @@ jobs:
 
       - name: Run git annex test under BeeGFS
         env:
-          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
-        # --set-home mirrors the *-home flavors of build-ubuntu.yaml:
-        # HOME lives on the tested FS, so `git annex test` exercises the
-        # rename-heavy code paths on BeeGFS.
+          BEEGFS_IMAGE_TAG: ${{ inputs.beegfs-version }}
         run: |
           sudo -E ./tools/eval_under_beegfs --set-home -- \
             timeout 2400 bash -c 'cd "$HOME" && git annex version | head -1 && git annex test'
@@ -120,7 +93,7 @@ jobs:
       - name: Container logs on failure
         if: failure()
         env:
-          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+          BEEGFS_IMAGE_TAG: ${{ inputs.beegfs-version }}
         run: |
           echo "=== compose logs ==="
           sudo -E docker compose -f "beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
@@ -131,7 +104,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ matrix.beegfs-version }}
+          name: logs-${{ inputs.beegfs-version }}
           path: |
             /var/log/beegfs-*
           if-no-files-found: ignore

@@ -1,0 +1,37 @@
+name: BeeGFS 7.4.6
+
+# Thin dispatcher so this version gets a distinct README badge.
+# Delegates all work to _test-beegfs.yaml (reusable).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/_test-beegfs.yaml"
+      - ".github/workflows/test-beegfs-7.4.6.yaml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/_test-beegfs.yaml"
+      - ".github/workflows/test-beegfs-7.4.6.yaml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"  # Mon 05:17 UTC
+
+concurrency:
+  group: test-beegfs-7.4.6-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: ./.github/workflows/_test-beegfs.yaml
+    with:
+      beegfs-version: "7.4.6"
+    permissions:
+      contents: read
+      actions: read
