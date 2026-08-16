@@ -41,7 +41,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        beegfs-version: ["7.4.6", "7.4.7", "8.1.0"]
+        # Constraints:
+        # - Container image tag must exist on ghcr.io/thinkparq/beegfs-mgmtd
+        #   (7.4.6 is the last 7.4.x image; 7.4.7 has APT client but no image).
+        # - APT client-dkms must exist for the same version on beegfs.io
+        #   (only 8.1.0 of the v8 line has APT; 8.2+ ships images only).
+        # So the intersection is {7.4.6, 8.1.0} until upstream fills the
+        # gaps.
+        beegfs-version: ["7.4.6", "8.1.0"]
     steps:
       - uses: actions/checkout@v4
 
@@ -58,10 +65,18 @@ jobs:
           sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
             -o /etc/apt/trusted.gpg.d/beegfs.asc
           sudo apt-get update -qq
+          # v8 dropped `beegfs-helperd` (functionality folded into `beegfs-client`)
+          # and renamed `beegfs-utils` -> `beegfs-tools`.
+          major="${BEEGFS_VERSION%%.*}"
+          if [ "$major" = "7" ]; then
+            pkgs="beegfs-client-dkms beegfs-helperd beegfs-utils"
+          else
+            pkgs="beegfs-client-dkms beegfs-client beegfs-tools"
+          fi
           sudo apt-get install -y --no-install-recommends \
-            dkms "linux-headers-$(uname -r)" \
-            beegfs-client-dkms beegfs-helperd beegfs-utils
+            dkms "linux-headers-$(uname -r)" $pkgs
           modinfo beegfs
+          ls /opt/beegfs/sbin/ 2>&1 | head
 
       - name: Fetch latest git-annex daily build from con/git-annex
         env:

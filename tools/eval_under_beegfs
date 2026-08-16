@@ -129,13 +129,26 @@ start_cluster() {
 }
 
 write_confs() {
-  log "writing $CONF_ACTIVE + $HELPERD_ACTIVE"
+  log "writing $CONF_ACTIVE"
   "${SUDO[@]}" install -d /etc/beegfs
   "${SUDO[@]}" install -m 0644 "$CONF_TEMPLATE"    "$CONF_ACTIVE"
-  "${SUDO[@]}" install -m 0644 "$HELPERD_TEMPLATE" "$HELPERD_ACTIVE"
+  # BeeGFS v8 dropped the standalone beegfs-helperd binary; the mount
+  # sanity check that talks to helperd on tcp/8006 would then fail. If
+  # we're not going to start helperd, disable the sanity check.
+  if [ ! -x "$HELPERD_BIN" ]; then
+    log "no helperd binary at $HELPERD_BIN -- disabling sysMountSanityCheckMS"
+    echo "sysMountSanityCheckMS = 0" \
+      | "${SUDO[@]}" tee -a "$CONF_ACTIVE" >/dev/null
+  else
+    "${SUDO[@]}" install -m 0644 "$HELPERD_TEMPLATE" "$HELPERD_ACTIVE"
+  fi
 }
 
 start_helperd() {
+  if [ ! -x "$HELPERD_BIN" ]; then
+    log "skipping beegfs-helperd (binary absent -- BeeGFS v8+ folds it in)"
+    return 0
+  fi
   # The shipped systemd unit reads /etc/beegfs/beegfs-helperd.conf, which
   # has auth enabled by default and would refuse to start. Bypass systemd
   # and launch helperd directly with our test conf. runDaemonized=true in
@@ -143,7 +156,6 @@ start_helperd() {
   log "starting beegfs-helperd (direct, cfgFile=$HELPERD_ACTIVE)"
   "${SUDO[@]}" systemctl stop beegfs-helperd 2>/dev/null || true
   "${SUDO[@]}" "$HELPERD_BIN" "cfgFile=$HELPERD_ACTIVE"
-  # Wait for port 8006 (timeout ~5s).
   local w=0
   while [ "$w" -lt 5 ]; do
     if "${SUDO[@]}" ss -ltn "sport = :8006" 2>/dev/null | grep -q :8006; then
@@ -173,7 +185,7 @@ teardown() {
   fi
   log "teardown"
   "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
-  "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  [ -x "$HELPERD_BIN" ] && "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
   BEEGFS_DATA_ROOT="$DATA_ROOT" \
     "${SUDO_E[@]}" docker compose -f "$COMPOSE" down -v 2>/dev/null || true
   "${SUDO[@]}" rm -rf "$DATA_ROOT" "$CONF_ACTIVE" "$HELPERD_ACTIVE"
