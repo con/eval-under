@@ -15,14 +15,16 @@ gets caught. Related upstream ask:
 
 ## Layout
 
-| Path                                    | Purpose                                                                |
-| --------------------------------------- | ---------------------------------------------------------------------- |
-| `Vagrantfile` + `provision/`            | Ubuntu 24.04 libvirt VM with docker + BeeGFS client + git-annex        |
-| `beegfs/docker-compose.yml`             | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`  |
-| `beegfs/beegfs-client.conf.template`    | Minimal client conf pointing at localhost, no auth                     |
-| `tools/eval_under_beegfs`               | Wrapper: bring up cluster, mount, run cmd with `TMPDIR` on BeeGFS      |
-| `.github/workflows/smoke.yaml`          | End-to-end sanity of the harness on a real GH runner                   |
-| `drafts/git-annex-test-beegfs.yaml`     | Copy-target workflow for `datalad/git-annex`                           |
+| Path                                     | Purpose                                                                       |
+| ---------------------------------------- | ----------------------------------------------------------------------------- |
+| `Vagrantfile` + `provision/`             | Ubuntu 24.04 libvirt VM with docker + BeeGFS client + git-annex               |
+| `beegfs/docker-compose-v7.yml`           | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`         |
+| `beegfs/docker-compose-v8.yml`           | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)    |
+| `beegfs/beegfs-client.conf.template`     | Minimal client conf pointing at localhost, no auth                            |
+| `beegfs/beegfs-helperd.conf.template`    | Minimal helperd conf (distinct schema from client)                            |
+| `tools/eval_under_beegfs`                | Wrapper: bring up cluster, mount, run cmd with `TMPDIR` on BeeGFS             |
+| `.github/workflows/beegfs-test.yaml`     | Matrix of BeeGFS versions, runs `git annex test` against con/git-annex daily  |
+| `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `datalad/git-annex`                                  |
 
 ## Local iteration (VM)
 

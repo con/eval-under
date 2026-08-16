@@ -1,0 +1,122 @@
+name: git-annex test under BeeGFS
+
+# Matrix of BeeGFS versions, each cell runs `git annex test` against a
+# fresh daily build fetched from con/git-annex. The purpose is to catch
+# BeeGFS-specific regressions in git-annex (rename semantics, close-on-
+# exec issues, etc.) -- see git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/
+# for the original class of bugs.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/beegfs-test.yaml"
+  pull_request:
+    paths:
+      - "tools/**"
+      - "beegfs/**"
+      - "provision/**"
+      - ".github/workflows/beegfs-test.yaml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"  # Mon 05:17 UTC -- picks up new daily builds + image drift
+
+concurrency:
+  group: beegfs-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # ubuntu-22.04: kernel 5.15/6.5, within BeeGFS 7.4.x and 8.x DKMS
+    # support. ubuntu-24.04 hosted runners ship 6.17-azure which BeeGFS
+    # kernel modules cannot build against.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read  # to download artifacts from con/git-annex
+    strategy:
+      fail-fast: false
+      matrix:
+        beegfs-version: ["7.4.6", "7.4.7", "8.1.0"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BeeGFS client (DKMS) + utils
+        env:
+          BEEGFS_VERSION: ${{ matrix.beegfs-version }}
+        run: |
+          set -euo pipefail
+          codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+          list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-${codename}.list"
+          curl -fsI "$list_url" >/dev/null 2>&1 \
+            || list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-jammy.list"
+          sudo curl -fsSL "$list_url" -o /etc/apt/sources.list.d/beegfs.list
+          sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
+            -o /etc/apt/trusted.gpg.d/beegfs.asc
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            dkms "linux-headers-$(uname -r)" \
+            beegfs-client-dkms beegfs-helperd beegfs-utils
+          modinfo beegfs
+
+      - name: Fetch latest git-annex daily build from con/git-annex
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Find the most recent SUCCESSFUL "Build git-annex on Ubuntu" run.
+          run_id=$(gh run list \
+            --repo con/git-annex \
+            --workflow "Build git-annex on Ubuntu" \
+            --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId')
+          [ -n "$run_id" ] || { echo "no successful con/git-annex run found" >&2; exit 1; }
+          echo "downloading from run $run_id"
+          mkdir -p /tmp/ga
+          gh run download --repo con/git-annex "$run_id" --dir /tmp/ga \
+            --pattern 'git-annex-debianstandalone*'
+          find /tmp/ga -name '*.deb' -print
+          deb=$(find /tmp/ga -name '*.deb' | head -1)
+          [ -n "$deb" ] || { echo "no .deb in artifact" >&2; exit 1; }
+          sudo apt-get install -y "$deb"
+          git-annex version | head -3
+          echo "$(dpkg -L git-annex-standalone | grep -E '/bin/git-annex$' | xargs dirname)" \
+            >> "$GITHUB_PATH"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email test@github.land
+          git config --global user.name  "GitHub Almighty"
+
+      - name: Run git annex test under BeeGFS
+        env:
+          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+        # --set-home mirrors the *-home flavors of build-ubuntu.yaml:
+        # HOME lives on the tested FS, so `git annex test` exercises the
+        # rename-heavy code paths on BeeGFS.
+        run: |
+          sudo -E ./tools/eval_under_beegfs --set-home -- \
+            timeout 2400 bash -c 'cd "$HOME" && git annex version | head -1 && git annex test'
+
+      - name: Container logs on failure
+        if: failure()
+        env:
+          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+        run: |
+          echo "=== compose logs ==="
+          sudo -E docker compose -f "beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
+          echo "=== dmesg (beegfs) ==="
+          sudo dmesg | grep -i beegfs | tail -50 || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ matrix.beegfs-version }}
+          path: |
+            /var/log/beegfs-*
+          if-no-files-found: ignore

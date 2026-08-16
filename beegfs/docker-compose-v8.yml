@@ -1,0 +1,73 @@
+# BeeGFS v8 test cluster for eval_under_beegfs.
+#
+# Derived from ThinkParQ/beegfs-containers examples/docker-compose-v8.yml,
+# modified for host-mode networking so the beegfs kernel client on the
+# host can reach mgmtd/meta/storage on localhost. v8 replaces v7's
+# "confstring" command style with proper flags and adds a gRPC control
+# plane on 8010; legacy TCP/UDP messaging still runs on 8008/8005/8003.
+#
+# BEEGFS_DATA_ROOT (default /beegfs) chooses where target dirs live on host.
+# BEEGFS_IMAGE_TAG pins the ghcr.io/thinkparq/* image tag (default 8.1.0).
+
+services:
+  beegfs-management:
+    image: ghcr.io/thinkparq/beegfs-mgmtd:${BEEGFS_IMAGE_TAG:-8.1.0}
+    container_name: beegfs-mgmtd
+    privileged: true
+    network_mode: host
+    command: >-
+      --db-file /mnt/mgmt_tgt_mgmt01/mgmtd.sqlite
+      --log-target stderr
+      --tls-disable true
+      --auth-disable true
+    environment:
+      - beegfs_setup_1=beegfs-mgmtd --init --db-file /mnt/mgmt_tgt_mgmt01/mgmtd.sqlite --log-target stderr
+    volumes:
+      - ${BEEGFS_DATA_ROOT:-/beegfs}/mgmt_tgt_mgmt01:/mnt/mgmt_tgt_mgmt01
+
+  beegfs-meta:
+    image: ghcr.io/thinkparq/beegfs-meta:${BEEGFS_IMAGE_TAG:-8.1.0}
+    container_name: beegfs-meta
+    privileged: true
+    network_mode: host
+    depends_on:
+      - beegfs-management
+    # v8 meta still accepts the legacy confstring for compatibility --
+    # gRPC control-plane bits (sysMgmtdHost via gRPC on 8010) are
+    # negotiated automatically when it registers.
+    command: >-
+      storeMetaDirectory=/mnt/meta_01_tgt_0101
+      storeAllowFirstRunInit=false
+      sysMgmtdHost=127.0.0.1
+      connMgmtdPortTCP=8008
+      connMgmtdPortUDP=8008
+      connMetaPortTCP=8005
+      connMetaPortUDP=8005
+      connDisableAuthentication=true
+    environment:
+      - beegfs_setup_1=beegfs-setup-meta -C -p /mnt/meta_01_tgt_0101 -s 1 -S meta_01
+    volumes:
+      - ${BEEGFS_DATA_ROOT:-/beegfs}/meta_01_tgt_0101:/mnt/meta_01_tgt_0101
+
+  beegfs-storage:
+    image: ghcr.io/thinkparq/beegfs-storage:${BEEGFS_IMAGE_TAG:-8.1.0}
+    container_name: beegfs-storage
+    privileged: true
+    network_mode: host
+    depends_on:
+      - beegfs-management
+    command: >-
+      storeStorageDirectory=/mnt/stor_01_tgt_101,/mnt/stor_01_tgt_102
+      storeAllowFirstRunInit=false
+      sysMgmtdHost=127.0.0.1
+      connMgmtdPortTCP=8008
+      connMgmtdPortUDP=8008
+      connStoragePortTCP=8003
+      connStoragePortUDP=8003
+      connDisableAuthentication=true
+    environment:
+      - beegfs_setup_1=beegfs-setup-storage -C -p /mnt/stor_01_tgt_101 -s 1 -S stor_01_tgt_101 -i 101
+      - beegfs_setup_2=beegfs-setup-storage -C -p /mnt/stor_01_tgt_102 -s 1 -S stor_01_tgt_101 -i 102
+    volumes:
+      - ${BEEGFS_DATA_ROOT:-/beegfs}/stor_01_tgt_101:/mnt/stor_01_tgt_101
+      - ${BEEGFS_DATA_ROOT:-/beegfs}/stor_01_tgt_102:/mnt/stor_01_tgt_102

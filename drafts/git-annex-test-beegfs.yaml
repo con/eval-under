@@ -82,4 +82,7 @@ jobs:
 
       - name: Container logs on failure
         if: failure()
-        run: sudo docker compose -f beegfs/docker-compose.yml logs --tail=500 || true
+        env:
+          BEEGFS_IMAGE_TAG: ${{ matrix.beegfs-version }}
+        run: |
+          sudo -E docker compose -f "beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
