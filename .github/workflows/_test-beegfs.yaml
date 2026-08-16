@@ -42,13 +42,18 @@ jobs:
           sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/gpg/GPG-KEY-beegfs" \
             -o /etc/apt/trusted.gpg.d/beegfs.asc
           sudo apt-get update -qq
-          # v8 dropped `beegfs-helperd` (folded into `beegfs-client`) and
-          # renamed `beegfs-utils` -> `beegfs-tools`.
+          # v8 dropped `beegfs-helperd` as a standalone package and
+          # renamed `beegfs-utils` -> `beegfs-tools`. Note that in v8,
+          # `beegfs-client` and `beegfs-client-dkms` mutually Conflict:
+          # pick one. We want DKMS to build against the runner's kernel,
+          # so `beegfs-client-dkms` -- helperd absence is handled inside
+          # `tools/eval_under_beegfs` (skips startup + disables the mount
+          # sanity check).
           major="${BEEGFS_VERSION%%.*}"
           if [ "$major" = "7" ]; then
             pkgs="beegfs-client-dkms beegfs-helperd beegfs-utils"
           else
-            pkgs="beegfs-client-dkms beegfs-client beegfs-tools"
+            pkgs="beegfs-client-dkms beegfs-tools"
           fi
           sudo apt-get install -y --no-install-recommends \
             dkms "linux-headers-$(uname -r)" $pkgs
