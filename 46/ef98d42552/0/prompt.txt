@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>b5v29qwxs</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-yoh-proj-beegfs-test/b53af811-8587-4d17-b3c7-310d06b804c6/tasks/b5v29qwxs.output</output-file>
+<status>failed</status>
+<summary>Background command "Poll matrix workflow, report per-cell transitions" failed with exit code 1</summary>
+</task-notification>
