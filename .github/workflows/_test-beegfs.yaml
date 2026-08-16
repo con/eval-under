@@ -101,18 +101,18 @@ jobs:
 
       - name: Run git annex test under BeeGFS
         env:
-          BEEGFS_IMAGE_TAG: ${{ inputs.beegfs-version }}
+          EVAL_UNDER_BEEGFS_VERSION: ${{ inputs.beegfs-version }}
         run: |
-          sudo -E ./tools/eval_under_beegfs --set-home -- \
+          sudo -E ./bin/eval-under-beegfs --set-home -- \
             timeout 2400 bash -c 'cd "$HOME" && git annex version | head -1 && git annex test'
 
       - name: Container logs on failure
         if: failure()
         env:
-          BEEGFS_IMAGE_TAG: ${{ inputs.beegfs-version }}
+          EVAL_UNDER_BEEGFS_VERSION: ${{ inputs.beegfs-version }}
         run: |
           echo "=== compose logs ==="
-          sudo -E docker compose -f "fixtures/beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
+          sudo -E docker compose -f "fixtures/beegfs/docker-compose-v${EVAL_UNDER_BEEGFS_VERSION%%.*}.yml" logs --tail=500 || true
           echo "=== dmesg (beegfs) ==="
           sudo dmesg | grep -i beegfs | tail -50 || true
 
