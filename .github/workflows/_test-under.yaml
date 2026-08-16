@@ -1,0 +1,175 @@
+name: (reusable) git-annex test under <backend>
+
+# Reusable body for the eval-under framework. Takes a backend
+# (beegfs / nfs / loop) plus a backend-version (a BeeGFS point release,
+# a loop filesystem name, or `n/a` for NFS), installs the matching
+# client-side packages, fetches the freshest con/git-annex daily, and
+# runs the full `git annex test` under the requested filesystem.
+#
+# Invoked by per-flavour dispatcher workflows so each backend/version
+# combination gets its own badge URL. (GitHub only exposes one badge
+# per workflow file, not per matrix cell.)
+
+on:
+  workflow_call:
+    inputs:
+      backend:
+        description: "eval-under backend: beegfs | nfs | loop"
+        required: true
+        type: string
+      backend-version:
+        description: >-
+          For beegfs: point release (e.g. 7.4.6, 8.1.0).
+          For loop:   filesystem type (e.g. vfat, ext4).
+          For nfs:    literal "n/a" (no version to pin).
+        required: true
+        type: string
+
+jobs:
+  test:
+    # ubuntu-22.04: kernel 5.15/6.5, within BeeGFS 7.4.x and 8.x DKMS
+    # support. ubuntu-24.04 hosted runners ship 6.17-azure which BeeGFS
+    # kernel modules cannot build against. NFS + loop backends don't
+    # need this, but sharing the runner OS keeps the reusable simple.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read  # to download artifacts from con/git-annex
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install backend client dependencies
+        env:
+          BACKEND: ${{ inputs.backend }}
+          BACKEND_VERSION: ${{ inputs.backend-version }}
+        run: |
+          set -euo pipefail
+          case "$BACKEND" in
+            beegfs)
+              codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+              list_url="https://www.beegfs.io/release/beegfs_${BACKEND_VERSION}/dists/beegfs-${codename}.list"
+              curl -fsI "$list_url" >/dev/null 2>&1 \
+                || list_url="https://www.beegfs.io/release/beegfs_${BACKEND_VERSION}/dists/beegfs-jammy.list"
+              sudo curl -fsSL "$list_url" -o /etc/apt/sources.list.d/beegfs.list
+              sudo curl -fsSL "https://www.beegfs.io/release/beegfs_${BACKEND_VERSION}/gpg/GPG-KEY-beegfs" \
+                -o /etc/apt/trusted.gpg.d/beegfs.asc
+              sudo apt-get update -qq
+              # v8 dropped `beegfs-helperd` as a standalone package and
+              # renamed `beegfs-utils` -> `beegfs-tools`. Note that in
+              # v8, `beegfs-client` and `beegfs-client-dkms` mutually
+              # Conflict: pick one. We want DKMS to build against the
+              # runner's kernel, so `beegfs-client-dkms` -- helperd
+              # absence is handled inside `bin/eval-under-beegfs`
+              # (skips startup + disables the mount sanity check).
+              major="${BACKEND_VERSION%%.*}"
+              if [ "$major" = "7" ]; then
+                pkgs="beegfs-client-dkms beegfs-helperd beegfs-utils"
+              else
+                pkgs="beegfs-client-dkms beegfs-tools"
+              fi
+              sudo apt-get install -y --no-install-recommends \
+                dkms "linux-headers-$(uname -r)" $pkgs
+              modinfo beegfs
+              ls /opt/beegfs/sbin/ 2>&1 | head
+              ;;
+            nfs)
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends nfs-kernel-server
+              command -v exportfs
+              ;;
+            loop)
+              # Pick the mkfs package matching the requested filesystem.
+              case "$BACKEND_VERSION" in
+                vfat|msdos)  pkg=dosfstools ;;
+                xfs)         pkg=xfsprogs ;;
+                btrfs)       pkg=btrfs-progs ;;
+                ext2|ext3|ext4) pkg=e2fsprogs ;;  # usually preinstalled
+                *) echo "unknown loop filesystem: $BACKEND_VERSION" >&2; exit 1 ;;
+              esac
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends "$pkg"
+              command -v "mkfs.$BACKEND_VERSION"
+              ;;
+            *)
+              echo "unknown backend: $BACKEND" >&2; exit 1 ;;
+          esac
+
+      - name: Fetch latest git-annex daily build from con/git-annex
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Use REST API directly: `gh run list --status --workflow` has
+          # been observed returning stale (expired-artifact) runs on the
+          # runner's gh version. REST behaves correctly.
+          runs=$(gh api \
+            'repos/con/git-annex/actions/workflows/build-ubuntu.yaml/runs?status=success&per_page=10' \
+            --jq '.workflow_runs[].id')
+          [ -n "$runs" ] || { echo "no successful con/git-annex runs" >&2; exit 1; }
+          run_id=""
+          for r in $runs; do
+            n=$(gh api "repos/con/git-annex/actions/runs/$r/artifacts" \
+                  --jq '[.artifacts[] | select(.expired==false and (.name | startswith("git-annex-debianstandalone-packages_")))] | length')
+            if [ "$n" -gt 0 ]; then
+              run_id="$r"
+              break
+            fi
+          done
+          [ -n "$run_id" ] || { echo "no run with unexpired debianstandalone artifact" >&2; exit 1; }
+          echo "downloading from run $run_id"
+          mkdir -p /tmp/ga
+          gh run download --repo con/git-annex "$run_id" --dir /tmp/ga \
+            --pattern 'git-annex-debianstandalone*'
+          find /tmp/ga -name '*.deb' -print
+          deb=$(find /tmp/ga -name '*.deb' | head -1)
+          [ -n "$deb" ] || { echo "no .deb in artifact" >&2; exit 1; }
+          sudo apt-get install -y "$deb"
+          git-annex version | head -3
+          echo "$(dpkg -L git-annex-standalone | grep -E '/bin/git-annex$' | xargs dirname)" \
+            >> "$GITHUB_PATH"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email test@github.land
+          git config --global user.name  "GitHub Almighty"
+
+      - name: Run git annex test under ${{ inputs.backend }}
+        env:
+          BACKEND: ${{ inputs.backend }}
+          BACKEND_VERSION: ${{ inputs.backend-version }}
+        run: |
+          set -euo pipefail
+          # Backend-specific option to pass through the dispatcher.
+          case "$BACKEND" in
+            beegfs) opts="--version $BACKEND_VERSION" ;;
+            loop)   opts="--fs $BACKEND_VERSION" ;;
+            nfs)    opts="" ;;
+          esac
+          # shellcheck disable=SC2086
+          sudo -E ./bin/eval-under "$BACKEND" $opts --set-home -- \
+            timeout 2400 bash -c 'cd "$HOME" && git annex version | head -1 && git annex test'
+
+      - name: Container logs on failure (beegfs only)
+        if: failure() && inputs.backend == 'beegfs'
+        env:
+          EVAL_UNDER_BEEGFS_VERSION: ${{ inputs.backend-version }}
+        run: |
+          echo "=== compose logs ==="
+          sudo -E docker compose -f "fixtures/beegfs/docker-compose-v${EVAL_UNDER_BEEGFS_VERSION%%.*}.yml" logs --tail=500 || true
+          echo "=== dmesg (beegfs) ==="
+          sudo dmesg | grep -i beegfs | tail -50 || true
+
+      - name: dmesg tail on failure (nfs / loop)
+        if: failure() && inputs.backend != 'beegfs'
+        run: |
+          sudo dmesg | tail -100 || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ inputs.backend }}-${{ inputs.backend-version }}
+          path: |
+            /var/log/beegfs-*
+          if-no-files-found: ignore

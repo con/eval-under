@@ -1,38 +1,39 @@
-name: BeeGFS 8.1.0
+name: NFS
 
 # Thin dispatcher so this flavour gets a distinct README badge.
 # Delegates all work to _test-under.yaml (reusable).
+#
+# NFS backend uses `nfs-kernel-server` for a localhost loopback export;
+# no version to pin (kernel + nfs-utils are ambient on the runner OS).
 
 on:
   push:
     branches: [main, master]
     paths:
       - "bin/**"
-      - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-8.1.0.yaml"
+      - ".github/workflows/test-nfs.yaml"
   pull_request:
     paths:
       - "bin/**"
-      - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-8.1.0.yaml"
+      - ".github/workflows/test-nfs.yaml"
   workflow_dispatch:
   schedule:
     - cron: "17 5 * * 1"  # Mon 05:17 UTC
 
 concurrency:
-  group: test-beegfs-8.1.0-${{ github.ref }}
+  group: test-nfs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   call:
     uses: ./.github/workflows/_test-under.yaml
     with:
-      backend: "beegfs"
-      backend-version: "8.1.0"
+      backend: "nfs"
+      backend-version: "n/a"
     permissions:
       contents: read
       actions: read
