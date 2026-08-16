@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bz5zmn74p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-yoh-proj-beegfs-test/b53af811-8587-4d17-b3c7-310d06b804c6/tasks/bz5zmn74p.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll new matrix run" completed (exit code 0)</summary>
+</task-notification>
