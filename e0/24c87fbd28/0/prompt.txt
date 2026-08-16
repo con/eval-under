@@ -1,0 +1,1 @@
+may be add to README.md a matrix of badges from CI runs across versions?
