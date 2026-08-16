@@ -1,0 +1,193 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code 2.1.233 / Claude Opus 4.7
+#
+# eval-under-loop: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
+# optionally HOME) pointing at a loop-mounted local filesystem (dd a backing
+# image, losetup, mkfs.<fs>, mount).
+#
+# Backend of the eval-under framework. Absorbed from datalad's
+# tools/eval_under_testloopfs, with framework env-var names, a teardown
+# trap, and a default backing size bumped from 10MB to 100MB (git-annex's
+# testsuite blows past the tiny original in seconds).
+
+set -eu
+
+# Defaults (options override; env vars override defaults).
+MNT="${EVAL_UNDER_MOUNT:-/mnt/loop}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
+# Backward-compat: DATALAD_TESTS_TEMP_FS / DATALAD_TESTS_TEMP_FSSIZE (from
+# datalad's original script) are still honoured, but the preferred names
+# are EVAL_UNDER_LOOP_FS / EVAL_UNDER_LOOP_SIZE_MB. Only fall back if the
+# new name is unset.
+FS="${EVAL_UNDER_LOOP_FS:-${DATALAD_TESTS_TEMP_FS:-vfat}}"
+SIZE_MB="${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-100}}"
+
+usage() {
+  cat <<'EOF'
+Usage: eval-under-loop [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a loop-mounted local filesystem. A fresh backing image is
+dd'd, mkfs.<fs>'d, and loop-mounted for the duration of the command.
+
+Requires `mkfs.<fs>` for the chosen filesystem. For the default
+(`vfat`) that means `dosfstools`. Also common: `xfsprogs` (xfs),
+`e2fsprogs` (ext4, usually preinstalled), `btrfs-progs` (btrfs).
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT               /mnt/loop
+      Where to mount the loop device on the host.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT       (unset)
+      Also set HOME=<mount>/home for the wrapped command.
+
+  --keep               EVAL_UNDER_KEEP                (unset)
+      Skip teardown; leave loop + mount up for debugging.
+
+  --fs TYPE            EVAL_UNDER_LOOP_FS             vfat
+      Filesystem to create on the backing image. Anything with a
+      matching `mkfs.<type>` works: vfat, ext4, xfs, btrfs, ...
+
+  --size MB            EVAL_UNDER_LOOP_SIZE_MB        100
+      Backing image size in megabytes. Bumped from datalad's original
+      10 -- git-annex's testsuite fills that in a few seconds.
+
+  -h, --help
+      Print this help.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Deprecated / backward-compat env vars:
+
+  DATALAD_TESTS_TEMP_FS      Alias of EVAL_UNDER_LOOP_FS (datalad-era).
+  DATALAD_TESTS_TEMP_FSSIZE  Alias of EVAL_UNDER_LOOP_SIZE_MB.
+                             The new names take precedence if both set.
+
+Exit status: the wrapped command's exit status. Teardown runs on any
+exit (unless --keep).
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    --fs) FS="$2"; shift 2 ;;
+    --size) SIZE_MB="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || {
+    echo "must run as root (or have sudo available)" >&2; exit 2; }
+  SUDO=(sudo)
+  SUDO_E=(sudo -E)
+else
+  SUDO=()
+  SUDO_E=()
+fi
+
+# Identify the invoking (non-root) user. When script is invoked as
+# `sudo eval-under-loop`, the wrapped command / mount uid= option should
+# reflect the pre-sudo user, not root.
+if [ -n "${SUDO_UID:-}" ]; then
+  INVOKER_UID="$SUDO_UID"; INVOKER_GID="${SUDO_GID:-$SUDO_UID}"
+else
+  INVOKER_UID="$(id -u)"; INVOKER_GID="$(id -g)"
+fi
+
+log() { printf '\nI: %s\n' "$*"; }
+
+ensure_mkfs_installed() {
+  if command -v "mkfs.$FS" >/dev/null 2>&1; then return 0; fi
+  echo "ERROR: mkfs.$FS not found in PATH." >&2
+  case "$FS" in
+    vfat)   echo "  Install with: apt install dosfstools" >&2 ;;
+    xfs)    echo "  Install with: apt install xfsprogs" >&2 ;;
+    btrfs)  echo "  Install with: apt install btrfs-progs" >&2 ;;
+    ext2|ext3|ext4) echo "  Install with: apt install e2fsprogs" >&2 ;;
+    *) echo "  Install the package that provides mkfs.$FS." >&2 ;;
+  esac
+  exit 3
+}
+
+# Backing image (distinct location from the mountpoint).
+IMAGE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-loop-XXXXX").img"
+LOOP=""
+
+start_loop() {
+  log "creating ${SIZE_MB}MB backing image $IMAGE"
+  # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
+  # used bs=1032192 which is a slightly-off historical vfat-cluster
+  # rounding; bs=1M is simpler and works for every fs we care about.
+  dd if=/dev/zero "of=$IMAGE" bs=1M "count=$SIZE_MB" status=none
+
+  log "losetup --find --show $IMAGE"
+  LOOP=$("${SUDO[@]}" losetup --find --show "$IMAGE")
+  echo "I: loop device: $LOOP"
+
+  log "mkfs.$FS $LOOP"
+  "${SUDO[@]}" "mkfs.$FS" "$LOOP" >/dev/null
+}
+
+mount_loop() {
+  log "mounting $LOOP ($FS) at $MNT"
+  "${SUDO[@]}" mkdir -p "$MNT"
+  # Not every mkfs supports uid= (e.g. ext4 doesn't); pass it only for
+  # filesystems that ignore ownership themselves and need it as a mount
+  # option to grant the invoking user write access.
+  case "$FS" in
+    vfat|msdos|exfat|ntfs)
+      "${SUDO[@]}" mount -o "uid=$INVOKER_UID,gid=$INVOKER_GID" "$LOOP" "$MNT"
+      ;;
+    *)
+      "${SUDO[@]}" mount "$LOOP" "$MNT"
+      "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
+      ;;
+  esac
+  "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
+}
+
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving loop + mount up (exit=$rc)"
+    return "$rc"
+  fi
+  log "teardown"
+  "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
+  [ -n "$LOOP" ] && "${SUDO[@]}" losetup -d "$LOOP" 2>/dev/null || true
+  "${SUDO[@]}" rm -rf "$MNT" "$IMAGE" 2>/dev/null || true
+  return "$rc"
+}
+trap teardown EXIT
+
+ensure_mkfs_installed
+start_loop
+mount_loop
+
+RUN_HOME="$HOME"
+if [ "$SET_HOME" = 1 ]; then
+  RUN_HOME="$MNT/home"
+  mkdir -p "$RUN_HOME"
+fi
+
+log "running: $*"
+HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" "$@"

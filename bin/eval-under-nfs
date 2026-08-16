@@ -1,0 +1,197 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code 2.1.233 / Claude Opus 4.7
+#
+# eval-under-nfs: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
+# optionally HOME) pointing at a local NFS loopback mount (localhost export
+# of a fresh directory, mounted via `mount -t nfs`).
+#
+# Backend of the eval-under framework. Absorbed from datalad's
+# tools/eval_under_nfs, with framework env-var names and a teardown trap.
+
+set -eu
+
+# Defaults (options override; env vars override defaults).
+MNT="${EVAL_UNDER_MOUNT:-/mnt/nfs}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
+# Backward-compat: DATALAD_TESTS_NFS_SYNC (from datalad's original script) is
+# still honoured, but the preferred name is EVAL_UNDER_NFS_SYNC. Only fall
+# back if the new name is unset.
+SYNC="${EVAL_UNDER_NFS_SYNC:-${DATALAD_TESTS_NFS_SYNC:-}}"
+
+usage() {
+  cat <<'EOF'
+Usage: eval-under-nfs [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a local NFS loopback mount. A fresh backing directory is
+exported to localhost and re-mounted via `mount -t nfs` for the
+duration of the command.
+
+Requires the `nfs-kernel-server` package to be installed. If missing,
+install with: apt install nfs-kernel-server
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT               /mnt/nfs
+      Where to mount NFS on the host.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT       (unset)
+      Also set HOME=<mount>/home for the wrapped command.
+
+  --keep               EVAL_UNDER_KEEP                (unset)
+      Skip teardown; leave export + mount up for debugging.
+
+  --sync               EVAL_UNDER_NFS_SYNC            (unset)
+      Use the NFS `sync` export/mount option (default is `async`, which
+      is ~100x faster: the server replies before changes hit stable
+      storage). This matters -- git-annex/git issue thousands of fsyncs
+      during clone/save/get, and `sync` pushed datalad CI jobs past 6h.
+      Enable to reproduce that slowdown locally.
+
+  -h, --help
+      Print this help.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Deprecated / backward-compat env vars:
+
+  DATALAD_TESTS_NFS_SYNC     Alias of EVAL_UNDER_NFS_SYNC (datalad-era).
+                             The new name takes precedence if both set.
+
+Exit status: the wrapped command's exit status. Teardown runs on any
+exit (unless --keep).
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    --sync) SYNC=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+if [ -n "${SYNC:-}" ] && [ "$SYNC" != 0 ]; then
+  NFS_OPTS="rw,sync"
+else
+  NFS_OPTS="rw,async"
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || {
+    echo "must run as root (or have sudo available)" >&2; exit 2; }
+  SUDO=(sudo)
+  SUDO_E=(sudo -E)
+else
+  SUDO=()
+  SUDO_E=()
+fi
+
+# Identify the invoking (non-root) user for chown / drop-priv steps.
+# NFS's default root_squash maps root writes to nobody, so we need the
+# real user's uid/gid to own the mount root and to create RUN_HOME.
+if [ -n "${SUDO_UID:-}" ]; then
+  INVOKER_UID="$SUDO_UID"; INVOKER_GID="${SUDO_GID:-$SUDO_UID}"
+  INVOKER_USER="${SUDO_USER:-$INVOKER_UID}"
+else
+  INVOKER_UID="$(id -u)"; INVOKER_GID="$(id -g)"
+  INVOKER_USER="$(id -un)"
+fi
+
+log() { printf '\nI: %s\n' "$*"; }
+
+ensure_nfs_installed() {
+  if command -v exportfs >/dev/null 2>&1; then return 0; fi
+  echo "ERROR: nfs-kernel-server not installed." >&2
+  echo "  Install with: apt install nfs-kernel-server" >&2
+  exit 3
+}
+
+# Backing dir that gets exported (distinct from the mountpoint so we don't
+# nfs-loop-back into ourselves).
+ORIG="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-nfs-XXXXX").orig"
+
+start_export() {
+  log "creating backing dir $ORIG (owned by uid=$INVOKER_UID gid=$INVOKER_GID)"
+  "${SUDO[@]}" mkdir -p "$ORIG"
+  # Chown BEFORE the export so the mounted root inode is invoker-owned;
+  # under root_squash a later chown as root would be denied.
+  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$ORIG"
+
+  log "exportfs -o $NFS_OPTS localhost:$ORIG"
+  "${SUDO[@]}" exportfs -o "$NFS_OPTS" "localhost:$ORIG"
+}
+
+mount_nfs() {
+  log "mounting NFS at $MNT"
+  "${SUDO[@]}" mkdir -p "$MNT"
+  "${SUDO[@]}" mount -t nfs -o "$NFS_OPTS" "localhost:$ORIG" "$MNT"
+  "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
+}
+
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving export + mount up (exit=$rc)"
+    return "$rc"
+  fi
+  log "teardown"
+  "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
+  "${SUDO[@]}" exportfs -u "localhost:$ORIG" 2>/dev/null || true
+  "${SUDO[@]}" rm -rf "$MNT" "$ORIG" 2>/dev/null || true
+  return "$rc"
+}
+trap teardown EXIT
+
+ensure_nfs_installed
+start_export
+mount_nfs
+
+RUN_HOME="$HOME"
+if [ "$SET_HOME" = 1 ]; then
+  RUN_HOME="$MNT/home"
+  # mkdir as the invoker -- root_squash means a root mkdir over NFS
+  # lands as nobody:nogroup and the wrapped command can't cd into it.
+  # (We could be running as effective-root either via `sudo <script>` or
+  # directly as root; use INVOKER_UID rather than SUDO array length.)
+  if [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+    sudo -u "$INVOKER_USER" mkdir -p "$RUN_HOME"
+  else
+    mkdir -p "$RUN_HOME"
+  fi
+fi
+
+# Drop back to the invoking user for the wrapped command. Under NFS
+# `root_squash` (the default export option), a root-owned process cannot
+# write to a user-owned mount root, which breaks `git init` / `git annex
+# init` inside the wrapped command. Datalad's original script sidestepped
+# this by only using sudo for the mount/export steps and running the
+# wrapped command as-is. We preserve that behaviour transparently: if the
+# script was invoked as `sudo eval-under-nfs`, the wrapped command runs
+# as the pre-sudo user; if invoked as root directly, it runs as root
+# (and the caller had better have used --no-root-squash exports).
+if [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+  log "running (as uid=$INVOKER_UID): $*"
+  sudo -u "$INVOKER_USER" -E \
+    env HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" \
+    "$@"
+else
+  log "running: $*"
+  HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" "$@"
+fi
