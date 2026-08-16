@@ -2,11 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
 # SPDX-License-Identifier: MIT
 #
-# Generated with Claude Code 2.1.63 / Claude Opus 4.7
+# Generated with Claude Code 2.1.233 / Claude Opus 4.7
 #
-# Provision an Ubuntu 24.04 VM to develop/test the beegfs-test harness:
-#   - Docker CE + compose plugin
-#   - BeeGFS client kernel module (DKMS) + helperd + utils
+# Provision an Ubuntu 24.04 VM to develop/test the eval-under harness:
+#   - Docker CE + compose plugin                     (eval-under-beegfs)
+#   - BeeGFS client kernel module (DKMS) + helperd   (eval-under-beegfs)
+#   - nfs-kernel-server                              (eval-under-nfs)
+#   - dosfstools + xfsprogs + btrfs-progs            (eval-under-loop, per fs)
 #   - git-annex + git (Ubuntu apt versions, enough to smoke-test the wrapper)
 #
 # Idempotent: safe to re-run via `vagrant provision`.
@@ -27,6 +29,16 @@ apt-get install -y --no-install-recommends \
   ca-certificates curl gnupg lsb-release \
   build-essential dkms "linux-headers-$(uname -r)" \
   git git-annex jq
+
+log "eval-under-nfs / eval-under-loop dependencies"
+# nfs-kernel-server: provides exportfs + mount.nfs (eval-under-nfs).
+# dosfstools:        mkfs.vfat (eval-under-loop --fs vfat, the default).
+# xfsprogs:          mkfs.xfs  (eval-under-loop --fs xfs).
+# btrfs-progs:       mkfs.btrfs (eval-under-loop --fs btrfs).
+# e2fsprogs is preinstalled on Ubuntu (mkfs.ext4).
+apt-get install -y --no-install-recommends \
+  nfs-kernel-server \
+  dosfstools xfsprogs btrfs-progs
 
 log "Docker CE + compose plugin"
 if ! command -v docker >/dev/null; then
@@ -82,10 +94,13 @@ if ! modinfo beegfs >/dev/null 2>&1; then
   exit 1
 fi
 
-# helperd disabled by default — eval_under_beegfs starts it on demand.
+# helperd disabled by default — eval-under-beegfs starts it on demand.
 systemctl disable --now beegfs-helperd || true
 
 log "Provisioning complete"
 echo "  git-annex : $(git-annex version | head -1)"
 echo "  docker    : $(docker --version)"
 echo "  beegfs mod: $(modinfo -F version beegfs 2>/dev/null || echo '?')"
+echo "  mkfs.vfat : $(command -v mkfs.vfat || echo missing)"
+echo "  mkfs.xfs  : $(command -v mkfs.xfs  || echo missing)"
+echo "  exportfs  : $(command -v exportfs  || echo missing)"
