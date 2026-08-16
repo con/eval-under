@@ -8,14 +8,14 @@ on:
     branches: [main, master]
     paths:
       - "tools/**"
-      - "beegfs/**"
+      - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-beegfs.yaml"
       - ".github/workflows/test-beegfs-7.4.6.yaml"
   pull_request:
     paths:
       - "tools/**"
-      - "beegfs/**"
+      - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-beegfs.yaml"
       - ".github/workflows/test-beegfs-7.4.6.yaml"

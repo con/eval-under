@@ -112,7 +112,7 @@ jobs:
           BEEGFS_IMAGE_TAG: ${{ inputs.beegfs-version }}
         run: |
           echo "=== compose logs ==="
-          sudo -E docker compose -f "beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
+          sudo -E docker compose -f "fixtures/beegfs/docker-compose-v${BEEGFS_IMAGE_TAG%%.*}.yml" logs --tail=500 || true
           echo "=== dmesg (beegfs) ==="
           sudo dmesg | grep -i beegfs | tail -50 || true
 

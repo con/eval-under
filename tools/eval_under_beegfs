@@ -40,14 +40,14 @@ DATA_ROOT="${BEEGFS_DATA_ROOT:-/beegfs}"
 # styles (confstring vs proper CLI flags) so a single template doesn't fit.
 IMAGE_TAG="${BEEGFS_IMAGE_TAG:-7.4.6}"
 MAJOR="${IMAGE_TAG%%.*}"
-COMPOSE="$repo_root/beegfs/docker-compose-v${MAJOR}.yml"
+COMPOSE="$repo_root/fixtures/beegfs/docker-compose-v${MAJOR}.yml"
 [ -f "$COMPOSE" ] || {
   echo "ERROR: no compose file for BeeGFS v${MAJOR} (looked for $COMPOSE)" >&2
   exit 2
 }
-CONF_TEMPLATE="$repo_root/beegfs/beegfs-client.conf.template"
+CONF_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-client.conf.template"
 CONF_ACTIVE="/etc/beegfs/beegfs-client-test.conf"
-HELPERD_TEMPLATE="$repo_root/beegfs/beegfs-helperd.conf.template"
+HELPERD_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-helperd.conf.template"
 HELPERD_ACTIVE="/etc/beegfs/beegfs-helperd-test.conf"
 HELPERD_BIN="/opt/beegfs/sbin/beegfs-helperd"
 STARTUP_WAIT="${BEEGFS_STARTUP_WAIT:-60}"
