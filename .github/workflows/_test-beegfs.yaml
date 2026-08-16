@@ -65,12 +65,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          run_id=$(gh run list \
-            --repo con/git-annex \
-            --workflow "Build git-annex on Ubuntu" \
-            --status success --limit 1 \
-            --json databaseId --jq '.[0].databaseId')
-          [ -n "$run_id" ] || { echo "no successful con/git-annex run found" >&2; exit 1; }
+          # Use REST API directly: `gh run list --status --workflow` has
+          # been observed returning stale (expired-artifact) runs on the
+          # runner's gh version. REST behaves correctly.
+          runs=$(gh api \
+            'repos/con/git-annex/actions/workflows/build-ubuntu.yaml/runs?status=success&per_page=10' \
+            --jq '.workflow_runs[].id')
+          [ -n "$runs" ] || { echo "no successful con/git-annex runs" >&2; exit 1; }
+          run_id=""
+          for r in $runs; do
+            n=$(gh api "repos/con/git-annex/actions/runs/$r/artifacts" \
+                  --jq '[.artifacts[] | select(.expired==false and (.name | startswith("git-annex-debianstandalone-packages_")))] | length')
+            if [ "$n" -gt 0 ]; then
+              run_id="$r"
+              break
+            fi
+          done
+          [ -n "$run_id" ] || { echo "no run with unexpired debianstandalone artifact" >&2; exit 1; }
           echo "downloading from run $run_id"
           mkdir -p /tmp/ga
           gh run download --repo con/git-annex "$run_id" --dir /tmp/ga \
