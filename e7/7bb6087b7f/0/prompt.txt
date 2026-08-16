@@ -1,0 +1,17 @@
+<task-notification>
+<task-id>baicbv235</task-id>
+<tool-use-id>toolu_015hFi4CYt7oufNinwtUkTD9</tool-use-id>
+<output-file>/tmp/claude-1000/-home-yoh-proj-beegfs-test/b53af811-8587-4d17-b3c7-310d06b804c6/tasks/baicbv235.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll both dispatcher runs" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bp1or738k</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-yoh-proj-beegfs-test/b53af811-8587-4d17-b3c7-310d06b804c6/tasks/bp1or738k.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll the newest dispatcher runs" completed (exit code 0)</summary>
+</task-notification>

@@ -1,0 +1,48 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "e77bb6087b7f",
+  "session_id": "b53af811-8587-4d17-b3c7-310d06b804c6",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-16T01:30:47.285939794Z",
+  "branch": "master",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/_test-beegfs.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "b313abefa1b5",
+  "checkpoint_transcript_start": 1104,
+  "transcript_lines_at_start": 1104,
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 10588,
+    "cache_read_tokens": 4382491,
+    "output_tokens": 6354,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-16T01:30:47.21312683Z",
+    "agent_lines": 17,
+    "agent_removed": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "total_lines_changed": 23,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
