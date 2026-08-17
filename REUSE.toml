@@ -1,0 +1,52 @@
+version = 1
+
+# Project-native files: MIT.
+#
+# Enumerated path list (rather than `path = "**"`) so the Apache-2.0
+# block below does NOT aggregate MIT into the compose files. All
+# blocks match with aggregate precedence; a `path = "**"` catchall
+# combined with the Apache-2.0 block would produce a legally-valid
+# but ergonomically-noisy `MIT AND Apache-2.0` on those files.
+[[annotations]]
+path = [
+    "*.md",
+    "Vagrantfile",
+    ".noannex",
+    ".claude/**",
+    ".datalad/**",
+    ".github/**",
+    "bin/**",
+    "drafts/**",
+    "fixtures/beegfs/beegfs-*.conf.template",
+    "provision/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>"
+SPDX-License-Identifier = "MIT"
+
+# DataLad-derived shell backends: same license (MIT) as the project,
+# but the DataLad developers' copyright must also be preserved.
+# Absorbed from datalad/datalad/tools/eval_under_{nfs,testloopfs}.
+[[annotations]]
+path = [
+    "bin/eval-under-nfs",
+    "bin/eval-under-loop",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2013-2026 DataLad developers <team@datalad.org>"
+SPDX-License-Identifier = "MIT"
+
+# ThinkParQ-derived Docker Compose fixtures: kept under the upstream
+# Apache-2.0 license, with both upstream and local attribution.
+# Derived from ThinkParQ/beegfs-containers/examples/docker-compose-v{7,8}.yml.
+[[annotations]]
+path = [
+    "fixtures/beegfs/docker-compose-v7.yml",
+    "fixtures/beegfs/docker-compose-v8.yml",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = [
+    "2022 ThinkParQ GmbH",
+    "2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>",
+]
+SPDX-License-Identifier = "Apache-2.0"
