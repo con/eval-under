@@ -154,6 +154,25 @@ has a libvirt provider). To use virtualbox instead:
 `VAGRANT_DEFAULT_PROVIDER=virtualbox vagrant up` -- that switches the
 box to `bento/ubuntu-24.04` automatically.
 
+## Licensing
+
+Machine-readable per the [REUSE specification](https://reuse.software/):
+
+- License texts live in `LICENSES/` (MIT for project-native files,
+  Apache-2.0 for the ThinkParQ-derived BeeGFS Docker Compose fixtures).
+- Path-to-license mappings live in `REUSE.toml`.
+- Absorbed files preserve upstream attribution: `bin/eval-under-nfs`
+  and `bin/eval-under-loop` credit the DataLad developers (MIT);
+  `fixtures/beegfs/docker-compose-v{7,8}.yml` credit ThinkParQ GmbH
+  (Apache-2.0).
+- Validate with `uvx --from reuse reuse lint` (or `pip install reuse &&
+  reuse lint`). This project ships 100% REUSE-compliant.
+
+New files contributed to this repo don't need per-file SPDX headers;
+they are covered by the `REUSE.toml` catchall block. Add per-file
+headers (or an additional `[[annotations]]` block) only if the file
+carries a different license or additional attribution.
+
 ## References
 
 - Bug that motivated the BeeGFS coverage:
