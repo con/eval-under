@@ -216,7 +216,9 @@ teardown() {
   fi
   log "teardown"
   "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
-  [ -x "$HELPERD_BIN" ] && "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  if [ -x "$HELPERD_BIN" ]; then
+    "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  fi
   BEEGFS_DATA_ROOT="$DATA_ROOT" \
     "${SUDO_E[@]}" docker compose -f "$COMPOSE" down -v 2>/dev/null || true
   "${SUDO[@]}" rm -rf "$DATA_ROOT" "$CONF_ACTIVE" "$HELPERD_ACTIVE"
