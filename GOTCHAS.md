@@ -140,6 +140,32 @@ it is specifically the **adjusted unlocked branch** that breaks. In
 matters for DataLad specifically, which leans on adjusted branches far
 more than bare git-annex does.
 
+**`git annex test` wedges partway through, reproducibly.** Both
+full-suite runs stopped at the same place -- `Remote Tests / unavailable
+remote / removeKey` -- and sat there until killed (15+ minutes on the
+second). On ext4 that same test takes **0.02s and passes**, and the whole
+suite finishes in 1m21s.
+
+It is not an I/O hang. While wedged:
+
+- the mount stays responsive (`ls` returns immediately),
+- git-annex holds **no open files on the mount and no sockets**,
+- its threads sit in `futex_do_wait` / `ep_poll`, with no child
+  processes outstanding.
+
+That is a process waiting on something internal, not one blocked on the
+filesystem. Note also that git-annex sets `annex.sshcaching = false` here
+on its own, because ssh control sockets need unix sockets and this mount
+has none -- so the run is already on a different code path from a normal
+one.
+
+Two caveats before anyone reports this upstream: the same test passes in
+seconds when selected on its own with `-p '/unavailable remote/'`, so it
+needs the full-suite context; and this was git-annex 10.20240129 from
+Ubuntu 24.04, not a daily build. Re-run it through the reproduce
+workflow, which installs the daily build from con/git-annex, before
+filing anything.
+
 **Timestamps are quantised to the second.** Five files created back to
 back get one or two distinct mtimes, where every other filesystem
 measured gives five. Nothing else in the matrix has a clock this coarse,
