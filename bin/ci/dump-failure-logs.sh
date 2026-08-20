@@ -60,31 +60,60 @@ esac
 # harness is active. What --verbose-log leaves behind is one .out per
 # script, holding that script's full TAP stream.
 #
-# prove's own summary (in the job log, just above this dump) already
-# names the failing scripts and assertion numbers. What it cannot show
-# is *why* each one failed, so pull the failing assertions and their
-# surrounding output out of the .out files here.
+# prove's own Test Summary Report is in the job log above this dump, but
+# on a filesystem that fails broadly (vfat) this dump is thousands of
+# lines, which scrolls that summary out of reach. So: detail for the
+# first few failing scripts, and a compact roll-up printed LAST, so the
+# end of the job log always answers "how many, and where" without
+# scrolling.
+GIT_DUMP_MAX_SCRIPTS="${EVAL_UNDER_GIT_DUMP_MAX_SCRIPTS:-8}"
+GIT_DUMP_TAIL_LINES="${EVAL_UNDER_GIT_DUMP_TAIL_LINES:-30}"
+
 if [ "$TARGET" = "git" ]; then
     results="$SRC_DIR/git/t/test-results"
     echo "=== git testsuite failures ($results) ==="
     if [ -d "$results" ]; then
-        found=0
+        # Pass 1: which scripts failed, and how badly.
+        names=() counts=()
         for out in "$results"/*.out; do
             [ -e "$out" ] || continue
-            nfail="$(grep -c '^not ok ' "$out" 2>/dev/null || true)"
-            [ "${nfail:-0}" -gt 0 ] || continue
-            found=1
-            echo "--- $(basename "${out%.out}"): $nfail failed ---"
-            # The assertion titles first: a compact index of what broke.
-            grep '^not ok ' "$out" | head -40 || true
-            # Then the tail, which holds the last failure's actual
-            # diff/stderr -- the part that says which syscall disagreed.
-            echo "  ... last 60 lines of $(basename "$out"):"
-            tail -60 "$out" | sed 's/^/  | /' || true
-            echo
+            n="$(grep -c '^not ok ' "$out" 2>/dev/null || true)"
+            [ "${n:-0}" -gt 0 ] || continue
+            names+=("$(basename "${out%.out}")")
+            counts+=("$n")
         done
-        [ "$found" -eq 1 ] || \
+
+        if [ "${#names[@]}" -eq 0 ]; then
             echo "no .out file recorded a failure (crash or setup failure?)"
+        else
+            # Pass 2: detail, for the first few only. The rest are in the
+            # uploaded artifact -- dumping 100 scripts inline helps nobody.
+            shown=0
+            for i in "${!names[@]}"; do
+                [ "$shown" -lt "$GIT_DUMP_MAX_SCRIPTS" ] || break
+                shown=$((shown + 1))
+                out="$results/${names[$i]}.out"
+                echo "--- ${names[$i]}: ${counts[$i]} failed ---"
+                grep '^not ok ' "$out" | head -40 || true
+                echo "  ... last $GIT_DUMP_TAIL_LINES lines of ${names[$i]}.out:"
+                tail -"$GIT_DUMP_TAIL_LINES" "$out" | sed 's/^/  | /' || true
+                echo
+            done
+            if [ "${#names[@]}" -gt "$shown" ]; then
+                echo "($(( ${#names[@]} - shown )) further failing script(s) not detailed here"
+                echo " -- full .out files are in the uploaded logs-* artifact)"
+                echo
+            fi
+
+            # Pass 3: the roll-up, deliberately last.
+            total=0
+            echo "=== git testsuite summary: ${#names[@]} script(s) with failures ==="
+            for i in "${!names[@]}"; do
+                printf '  %-40s %s failed\n' "${names[$i]}" "${counts[$i]}"
+                total=$((total + counts[i]))
+            done
+            echo "  $(printf '%-40s %s' 'TOTAL' "$total") failed assertion(s)"
+        fi
     else
         echo "no test-results directory (the suite never started?)"
     fi
