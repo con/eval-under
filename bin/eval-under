@@ -1,0 +1,95 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code 2.1.233 / Claude Opus 4.7
+#
+# eval-under: tiny dispatcher for the eval-under family of backends.
+# Delegates to bin/eval-under-<BACKEND>.
+#
+#   eval-under BACKEND [BACKEND_OPTIONS...] -- CMD [ARGS...]
+#   eval-under --list
+#   eval-under --help
+#   eval-under BACKEND --help
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+
+list_backends() {
+  # Any executable in $here named eval-under-<something>.
+  local f name
+  for f in "$here"/eval-under-*; do
+    [ -x "$f" ] || continue
+    name="${f##*/eval-under-}"
+    echo "$name"
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: eval-under BACKEND [BACKEND_OPTIONS...] -- CMD [ARGS...]
+       eval-under --list
+       eval-under --help
+       eval-under BACKEND --help
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a temporarily-mounted filesystem, selected by BACKEND.
+
+Backends available on this system:
+EOF
+  local b
+  for b in $(list_backends); do
+    echo "  - $b"
+  done
+  cat <<'EOF'
+
+Common options recognised by every backend:
+
+  --mount-point PATH   EVAL_UNDER_MOUNT
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT
+  --keep               EVAL_UNDER_KEEP
+
+Env vars set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Backend-specific options and env vars: run `eval-under BACKEND --help`.
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  usage >&2
+  exit 2
+fi
+
+case "$1" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  --list)
+    list_backends
+    exit 0
+    ;;
+  --*)
+    echo "unknown top-level option: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+backend="$1"
+shift
+target="$here/eval-under-$backend"
+
+if [ ! -x "$target" ]; then
+  echo "eval-under: unknown backend '$backend'" >&2
+  echo "available:" >&2
+  list_backends | sed 's/^/  /' >&2
+  exit 2
+fi
+
+exec "$target" "$@"

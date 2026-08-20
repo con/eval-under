@@ -2,61 +2,78 @@
 # SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
 # SPDX-License-Identifier: MIT
 #
-# Generated with Claude Code 2.1.63 / Claude Opus 4.7
+# Generated with Claude Code 2.1.233 / Claude Opus 4.7
 #
-# Evaluate a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally
-# HOME) pointing at a BeeGFS mount, backed by a containerised BeeGFS cluster
-# (mgmtd + meta + storage) brought up via docker compose.
+# eval-under-beegfs: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
+# optionally HOME) pointing at a BeeGFS mount, backed by a containerised
+# BeeGFS cluster (mgmtd + meta + storage) brought up via docker compose.
 #
-# Modelled on datalad/datalad tools/eval_under_nfs -- same wrapper shape so
-# CI usage matches: `eval_under_beegfs -- timeout 3600 git annex test`.
-#
-# Usage:
-#   eval_under_beegfs [--keep] [--mount-point PATH] [--set-home] -- CMD [ARGS...]
-#
-#   --keep         skip teardown (leave containers + mount alive for debugging)
-#   --mount-point  where to mount BeeGFS on host (default /mnt/beegfs)
-#   --set-home     also set HOME=<mount-point>/home (mimics the git-annex
-#                  build-ubuntu.yaml `*-home` flavors)
-#
-# Env vars:
-#   BEEGFS_MOUNT         overrides --mount-point default (/mnt/beegfs)
-#   BEEGFS_DATA_ROOT     host dir for container-side target storage (/beegfs)
-#   BEEGFS_IMAGE_TAG     image tag for ghcr.io/thinkparq/beegfs-* (default
-#                        7.4.6); major version selects docker-compose-v${N}.yml
-#                        so both v7.x and v8.x are supported
-#   BEEGFS_STARTUP_WAIT  seconds to wait for mgmtd to become reachable (60)
-#
-# Exit code == command's exit code. Teardown runs on any exit.
+# Backend of the eval-under framework. See `eval-under --help` for the
+# top-level dispatcher, and `eval-under-beegfs --help` for the option and
+# env-var tables below.
 
 set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$here/.." && pwd)"
 
-MNT="${BEEGFS_MOUNT:-/mnt/beegfs}"
-DATA_ROOT="${BEEGFS_DATA_ROOT:-/beegfs}"
-# Pick compose file by major version. v7 and v8 use different mgmtd command
-# styles (confstring vs proper CLI flags) so a single template doesn't fit.
-IMAGE_TAG="${BEEGFS_IMAGE_TAG:-7.4.6}"
-MAJOR="${IMAGE_TAG%%.*}"
-COMPOSE="$repo_root/beegfs/docker-compose-v${MAJOR}.yml"
-[ -f "$COMPOSE" ] || {
-  echo "ERROR: no compose file for BeeGFS v${MAJOR} (looked for $COMPOSE)" >&2
-  exit 2
-}
-CONF_TEMPLATE="$repo_root/beegfs/beegfs-client.conf.template"
+# Defaults (options override; env vars override defaults).
+MNT="${EVAL_UNDER_MOUNT:-/mnt/beegfs}"
+DATA_ROOT="${EVAL_UNDER_BEEGFS_DATA_ROOT:-/beegfs}"
+VERSION="${EVAL_UNDER_BEEGFS_VERSION:-7.4.6}"
+STARTUP_WAIT="${EVAL_UNDER_BEEGFS_STARTUP_WAIT:-60}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
 CONF_ACTIVE="/etc/beegfs/beegfs-client-test.conf"
-HELPERD_TEMPLATE="$repo_root/beegfs/beegfs-helperd.conf.template"
 HELPERD_ACTIVE="/etc/beegfs/beegfs-helperd-test.conf"
 HELPERD_BIN="/opt/beegfs/sbin/beegfs-helperd"
-STARTUP_WAIT="${BEEGFS_STARTUP_WAIT:-60}"
-KEEP=0
-SET_HOME=0
 
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
-  exit "${1:-2}"
+  cat <<'EOF'
+Usage: eval-under-beegfs [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a BeeGFS mount, backed by a containerised BeeGFS cluster
+(mgmtd + meta + storage) brought up via docker compose.
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT               /mnt/beegfs
+      Where to mount BeeGFS on the host.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT       (unset)
+      Also set HOME=<mount>/home for the wrapped command. Catches the
+      class of bugs seen when HOME itself lives on the tested FS.
+
+  --keep               EVAL_UNDER_KEEP                (unset)
+      Skip teardown; leave containers + mount up for debugging.
+
+  --version VER        EVAL_UNDER_BEEGFS_VERSION      7.4.6
+      Selects the ghcr.io/thinkparq/beegfs-* image tag AND the matching
+      client-DKMS branch. Major version picks the compose file:
+        7.x  ->  fixtures/beegfs/docker-compose-v7.yml
+        8.x  ->  fixtures/beegfs/docker-compose-v8.yml
+
+  --data-root PATH     EVAL_UNDER_BEEGFS_DATA_ROOT    /beegfs
+      Host dir for container-side target dirs (mgmtd + meta + storage).
+
+  --startup-wait S     EVAL_UNDER_BEEGFS_STARTUP_WAIT 60
+      Seconds to wait for mgmtd(8008) + meta(8005) + storage(8003) to
+      bind before giving up.
+
+  -h, --help
+      Print this help.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Exit status: the wrapped command's exit status. Teardown runs on any
+exit (unless --keep).
+EOF
 }
 
 while [ $# -gt 0 ]; do
@@ -64,13 +81,27 @@ while [ $# -gt 0 ]; do
     --keep) KEEP=1; shift ;;
     --mount-point) MNT="$2"; shift 2 ;;
     --set-home) SET_HOME=1; shift ;;
-    -h|--help) usage 0 ;;
+    --version) VERSION="$2"; shift 2 ;;
+    --data-root) DATA_ROOT="$2"; shift 2 ;;
+    --startup-wait) STARTUP_WAIT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
     --) shift; break ;;
-    *) echo "unknown arg: $1" >&2; usage 2 ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-[ $# -gt 0 ] || { echo "no command given" >&2; usage 2; }
+[ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+# Pick compose file by major version. v7 and v8 use different mgmtd command
+# styles (confstring vs proper CLI flags) so a single template doesn't fit.
+MAJOR="${VERSION%%.*}"
+COMPOSE="$repo_root/fixtures/beegfs/docker-compose-v${MAJOR}.yml"
+[ -f "$COMPOSE" ] || {
+  echo "ERROR: no compose file for BeeGFS v${MAJOR} (looked for $COMPOSE)" >&2
+  exit 2
+}
+CONF_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-client.conf.template"
+HELPERD_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-helperd.conf.template"
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || {
@@ -99,9 +130,9 @@ start_cluster() {
     "$DATA_ROOT/stor_01_tgt_101" \
     "$DATA_ROOT/stor_01_tgt_102"
 
-  log "docker compose up (BeeGFS ${IMAGE_TAG} via $(basename "$COMPOSE"))"
+  log "docker compose up (BeeGFS ${VERSION} via $(basename "$COMPOSE"))"
   BEEGFS_DATA_ROOT="$DATA_ROOT" \
-  BEEGFS_IMAGE_TAG="$IMAGE_TAG" \
+  BEEGFS_IMAGE_TAG="$VERSION" \
     "${SUDO_E[@]}" docker compose -f "$COMPOSE" up -d
 
   log "waiting up to ${STARTUP_WAIT}s for mgmtd(8008) + meta(8005) + storage(8003)"
@@ -185,7 +216,9 @@ teardown() {
   fi
   log "teardown"
   "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
-  [ -x "$HELPERD_BIN" ] && "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  if [ -x "$HELPERD_BIN" ]; then
+    "${SUDO[@]}" pkill -f "$HELPERD_BIN" 2>/dev/null || true
+  fi
   BEEGFS_DATA_ROOT="$DATA_ROOT" \
     "${SUDO_E[@]}" docker compose -f "$COMPOSE" down -v 2>/dev/null || true
   "${SUDO[@]}" rm -rf "$DATA_ROOT" "$CONF_ACTIVE" "$HELPERD_ACTIVE"
