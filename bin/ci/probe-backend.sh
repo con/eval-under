@@ -234,10 +234,14 @@ setup_cephfs() {
         quay.io/ceph/demo || give_up "ceph demo container did not start" || return 1
     defer "sudo docker rm -f eu-ceph; sudo rm -rf /etc/ceph/* /var/lib/ceph/*"
     local i
-    for i in $(seq 1 60); do
+    for i in $(seq 1 48); do
         [ -f /etc/ceph/ceph.conf ] && sudo ceph -s >/dev/null 2>&1 && break
         sleep 5
-        [ "$i" = 60 ] && { give_up "ceph cluster never became responsive"; return 1; }
+        # 4 minutes. Longer than this and the answer is "not on a runner",
+        # which is a verdict -- not a reason to hold the whole run open
+        # until the job timeout fires.
+        [ "$i" = 48 ] && { sudo docker logs --tail 30 eu-ceph 2>&1 || true
+                           give_up "ceph cluster never became responsive in 4min"; return 1; }
     done
     sudo ceph -s || true
     sudo ceph-fuse "$MNT" || give_up "ceph-fuse mount failed" || return 1

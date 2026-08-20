@@ -121,12 +121,15 @@ a self-hosted runner inside an institution that already licenses it.
 
 **The client is the wall, and it is a hard one.** Lustre's client is an
 out-of-tree kernel module. Whamcloud publishes Ubuntu packages, but as
-modules *prebuilt for specific kernels* (`lustre-client-modules-5.15.0-N-generic`),
-and GitHub's runners run Azure kernels -- `6.8.0-*-azure` on both the
-22.04 and 24.04 images. Neither matches, and the probe found no
-`lustre-client-modules-dkms` in the Ubuntu repo to build from source
-against the runner's kernel. There is also no `ubuntu2404` client repo
-published at all.
+modules *prebuilt per kernel* -- their ubuntu2204 index lists names like
+[`lustre-client-modules-5.15.0-39-generic`][lpkg] -- and GitHub's runners
+do not run those kernels -- measured, the runner is on
+`6.8.0-1064-azure` (ubuntu-22.04 image) or `6.17.0-1022-azure`
+(ubuntu-24.04). Also measured: `latest-release/ubuntu2204/client` has no
+`lustre-client-modules-dkms` to build from source against it, and there
+is no `ubuntu2404` client repo published at all. So neither the prebuilt
+route nor the DKMS route is open on a GitHub-hosted runner, and that is
+before the server question.
 
 **The server is a second wall.** Lustre's ldiskfs OSD needs a *patched*
 kernel; only the ZFS OSD runs on an unpatched one. So even with a
@@ -143,8 +146,9 @@ with a kernel Lustre supports. Three ways to get one, in increasing
 order of effort:
 
 1. **A VM on the runner.** GitHub-hosted Linux runners *do* expose
-   `/dev/kvm` -- the probe's own `dmesg` shows `kvm_amd: Nested
-   Virtualization enabled`. A Rocky/AlmaLinux 8 or 9 guest with
+   `/dev/kvm` -- the `vm-only` probe reports it present, and the kernel
+   log shows `kvm_amd: Nested Virtualization enabled`. `qemu-system-x86_64`
+   is not preinstalled but is one `apt install` away. A Rocky/AlmaLinux 8 or 9 guest with
    Whamcloud's repos, `llmount.sh` inside it, and the suite driven over
    SSH is entirely feasible. Cost: several minutes of boot and install
    per run, and a new `bin/eval-under-lustre` that is really "run this
@@ -166,6 +170,7 @@ answers the actual question ("what breaks on Lustre?") for a human
 sitting at a terminal. Promote to (1) only if the answer turns out to be
 interesting enough to want a badge for.
 
+[lpkg]: https://downloads.whamcloud.com/public/lustre/lustre-2.15.1/ubuntu2204/client/Packages
 [losd]: https://wiki.lustre.org/ZFS_OSD
 [ltest]: https://wiki.whamcloud.com/display/PUB/Testing+a+Lustre+filesystem
 [lvag]: https://wiki.lustre.org/Create_a_Virtual_HPC_Storage_Cluster_with_Vagrant
