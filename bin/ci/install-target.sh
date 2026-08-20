@@ -93,6 +93,16 @@ install_git() {
     apt_install build-essential gettext perl \
         zlib1g-dev libssl-dev libcurl4-openssl-dev libexpat1-dev
 
+    # bin/ci/target-git.sh drives the suite through `make prove`, so the
+    # TAP harness itself is a hard dependency. It ships in perl-modules
+    # (pulled in by perl above), but assert it here: a missing prove
+    # would otherwise surface as an opaque make failure minutes into the
+    # run, on the mount, after the whole build.
+    command -v prove >/dev/null || {
+        echo "ERROR: prove not found -- install perl-modules (TAP harness)" >&2
+        exit 3
+    }
+
     fetch_pinned git https://github.com/git/git "$EVAL_UNDER_GIT_REF"
 
     if [ -x "$checkout/git" ]; then

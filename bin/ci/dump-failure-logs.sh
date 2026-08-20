@@ -15,7 +15,7 @@
 #   beegfs:   `docker compose logs` + dmesg-filtered-for-beegfs
 #   nfs/loop: full dmesg tail
 # target side:
-#   git:      the failing tests' own output from t/test-results/
+#   git:      the failing assertions + output from t/test-results/*.out
 
 set -uo pipefail
 
@@ -55,19 +55,36 @@ case "$BACKEND" in
         ;;
 esac
 
-# git's testsuite keeps a per-script .out next to a .counts summary; the
-# aggregated `make` output only says which scripts failed, not why.
+# git's testsuite runs under `prove` here (see bin/ci/target-git.sh), so
+# there are no .counts files -- test-lib.sh only writes those when no TAP
+# harness is active. What --verbose-log leaves behind is one .out per
+# script, holding that script's full TAP stream.
+#
+# prove's own summary (in the job log, just above this dump) already
+# names the failing scripts and assertion numbers. What it cannot show
+# is *why* each one failed, so pull the failing assertions and their
+# surrounding output out of the .out files here.
 if [ "$TARGET" = "git" ]; then
     results="$SRC_DIR/git/t/test-results"
     echo "=== git testsuite failures ($results) ==="
     if [ -d "$results" ]; then
-        for counts in "$results"/*.counts; do
-            [ -e "$counts" ] || continue
-            grep -q '^failed 0$' "$counts" && continue
-            echo "--- $(basename "${counts%.counts}") ---"
-            cat "$counts" || true
-            tail -100 "${counts%.counts}.out" 2>/dev/null || true
+        found=0
+        for out in "$results"/*.out; do
+            [ -e "$out" ] || continue
+            nfail="$(grep -c '^not ok ' "$out" 2>/dev/null || true)"
+            [ "${nfail:-0}" -gt 0 ] || continue
+            found=1
+            echo "--- $(basename "${out%.out}"): $nfail failed ---"
+            # The assertion titles first: a compact index of what broke.
+            grep '^not ok ' "$out" | head -40 || true
+            # Then the tail, which holds the last failure's actual
+            # diff/stderr -- the part that says which syscall disagreed.
+            echo "  ... last 60 lines of $(basename "$out"):"
+            tail -60 "$out" | sed 's/^/  | /' || true
+            echo
         done
+        [ "$found" -eq 1 ] || \
+            echo "no .out file recorded a failure (crash or setup failure?)"
     else
         echo "no test-results directory (the suite never started?)"
     fi

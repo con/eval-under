@@ -70,7 +70,11 @@ Why these four, in order of how deep they sit:
   canonical filesystem-picky testbed and is maintained far more
   rigorously than anything hand-written here. Only the trash directories
   (where the tests' file operations happen) live on the mount; the build
-  itself stays on the runner's disk.
+  itself stays on the runner's disk. It is driven through `prove`, git's
+  TAP harness, rather than the default `make test` target -- under `make`
+  the first failing script aborts the run before the totals are ever
+  printed, whereas `prove` finishes every script and ends with a summary
+  naming each failure.
 - **git-annex** is the original motivation and the top of the stack.
 
 Pinned upstream refs live in `bin/ci/matrix.sh` and are bumped

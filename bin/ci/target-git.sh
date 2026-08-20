@@ -36,6 +36,10 @@
 #                         under two minutes on ext4. Space-separated
 #                         globs, e.g. 't00*.sh t13*.sh', to narrow it.
 #   EVAL_UNDER_GIT_JOBS   parallel test jobs (default: nproc)
+#   EVAL_UNDER_GIT_TEST_OPTS
+#                         extra options appended to GIT_TEST_OPTS, e.g.
+#                         '-x' for shell tracing in the per-script logs
+#                         (verbose, and it roughly triples artifact size).
 #   TMPDIR                <mount> -- trash directories go under here
 
 set -euo pipefail
@@ -47,7 +51,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 SRC="$EVAL_UNDER_SRC_DIR/git"
 TESTS_GLOB="${EVAL_UNDER_GIT_TESTS:-t0*.sh t1*.sh}"
-JOBS="${EVAL_UNDER_GIT_JOBS:-$(nproc)}"
+JOBS="${EVAL_UNDER_GIT_JOBS:-$(nproc)}"  # prove --jobs, not make -j
 
 [ -x "$SRC/git" ] || {
     echo "ERROR: no git build at $SRC -- run bin/ci/install-target.sh git first" >&2
@@ -77,12 +81,46 @@ echo "I: git $("$SRC/git" --version | awk '{print $3}') @ ${EVAL_UNDER_GIT_REF}"
 echo "I: ${#selected[@]} test scripts selected by '$TESTS_GLOB'"
 echo "I: trash directories under $root"
 
-# `make -C t` runs each selected script and aggregates. --root puts the
-# per-test trash directory on the mount; test-results/ stays on the
-# runner disk (it is bookkeeping, not filesystem exercise).
+# Run under `prove` (TAP), not the default `make test` target.
+#
+# This matters for reporting, and the difference is not cosmetic:
+#
+#   `make test` hangs the per-script recipes off a single
+#   `aggregate-results-and-cleanup` target. Under `make -j` without
+#   `-k`, the *first* failing script stops make from scheduling any
+#   more, so the run aborts partway through and `aggregate-results`
+#   -- the thing that prints the totals -- never runs at all. The job
+#   log then ends on whichever scripts happened to still be in flight,
+#   which is why a failing cell used to end on a screenful of passes
+#   and no summary anywhere.
+#
+#   `prove` is a TAP harness: it runs every selected script regardless
+#   of failures and ends with a "Test Summary Report" naming each
+#   failing script, its failing assertion numbers, and the totals
+#   ("Files=N, Tests=N ... Result: FAIL"). Same shape as the pjdfstest
+#   target's output, which is also prove-driven.
+#
+# UNIT_TESTS= empties git's C unit-test list, which the prove target
+# otherwise appends to $(T): those are built binaries testing in-process
+# data structures, they never touch the mount, and they would need a
+# separate build step here.
+#
+# --verbose-log tees each script's full output to
+# test-results/<script>.out. Under a TAP harness git writes no .counts
+# files (test-lib.sh guards those on HARNESS_ACTIVE), so the .out files
+# are what bin/ci/dump-failure-logs.sh reports from and what the job
+# uploads as an artifact.
+#
+# --root puts the per-test trash directory on the mount; the build and
+# test-results/ stay on the runner disk (bookkeeping, not filesystem
+# exercise).
 #
 # Note: the suite runs as root here (eval-under needs root to mount), so
 # git's SANITY prerequisite is off and the handful of tests asserting
 # "cannot write to a chmod-000 path" are skipped upstream-style rather
 # than failing.
-exec make -j"$JOBS" T="${selected[*]}" GIT_TEST_OPTS="--root=$root"
+exec make prove \
+    T="${selected[*]}" \
+    UNIT_TESTS= \
+    GIT_PROVE_OPTS="--timer --jobs $JOBS" \
+    GIT_TEST_OPTS="--root=$root --verbose-log ${EVAL_UNDER_GIT_TEST_OPTS:-}"
