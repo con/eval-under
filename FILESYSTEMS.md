@@ -84,9 +84,58 @@ afford to run the whole suite on.
 Every row below was produced by `bin/ci/probe-backend.sh <candidate>` on
 a GitHub-hosted runner, not from documentation. `BOOTSTRAPPED` means it
 mounted and was probed; `PARTIAL` means the interesting half is out of
-reach on a runner; failures carry their reason.
+reach on a runner; failures carry their reason. Times are the whole
+bring-up: package install, mkfs or server start, mount.
 
-<!-- PROBE TABLE -->
+Run 5 of the probe workflow, ubuntu-24.04 unless noted, kernel
+`6.17.0-1022-azure` (`6.8.0-1064-azure` on the 22.04 image).
+
+| Candidate | Verdict | Time | What the capability probe found |
+| --- | --- | --- | --- |
+| `gfs2` | **BOOTSTRAPPED** | 28s (61s on 22.04) | Everything green: symlinks, fcntl locks, SQLite WAL, xattrs, `link()` correctly refusing an existing name |
+| `ocfs2` | **BOOTSTRAPPED** | 39s (52s on 22.04) | Same -- a full POSIX profile |
+| `cifs` | **BOOTSTRAPPED** | 26s | **`sqlite-wal=no`, `sqlite-delete-mode=no`**, `symlink=no`, `fifo=no`, `exec-bit=no`, `perm-bits=no`, `case-sensitive=no` |
+| `exfat` | **BOOTSTRAPPED** | 25s | Crippled as expected: no symlinks, hardlinks, fifos, exec bit, xattrs; case-insensitive; **rejects `:*?` in names** |
+| `s3-rclone` | **BOOTSTRAPPED** | 46s | Crippled in the same shape as exfat -- but SQLite works |
+| `sshfs` | **BOOTSTRAPPED** | 10s | No fifos, no unix sockets, no xattrs, and **1-second timestamp granularity** (1 distinct mtime across 5 rapid creates, vs 5 everywhere else) |
+| `glusterfs` | **BOOTSTRAPPED** | 18s | Full POSIX profile through the FUSE client, SQLite WAL included |
+| `zfs` | **BOOTSTRAPPED** | 13s | Full POSIX profile |
+| `f2fs` | **BOOTSTRAPPED** | 39s | Full POSIX profile |
+| `ntfs3` | **BOOTSTRAPPED** | 22s | Full POSIX profile -- the in-kernel driver carries symlinks and mode bits, unlike vfat |
+| `nilfs2` | **BOOTSTRAPPED** | 27s | Full profile except `xattr-user=no` |
+| `udf` | **BOOTSTRAPPED** | 9s | Full profile except xattrs and **255-character names** |
+| `bcachefs` | **BOOTSTRAPPED** | 33s | Full POSIX profile |
+| `overlay` | **BOOTSTRAPPED** | 0s | Full POSIX profile |
+| `gocryptfs` | **BOOTSTRAPPED** | 9s | Full POSIX profile |
+| `encfs` | **BOOTSTRAPPED** | 9s | Full profile except **255-character names** -- encryption inflates the name past the underlying limit |
+| `vm-only` | *informational* | 0s | `/dev/kvm` **present**; `qemu-system-x86_64` not installed but one `apt install` away |
+| `ecryptfs` | **NOT BOOTSTRAPPABLE** | 14s | `mount -t ecryptfs` refused with the key options the probe passes |
+| `openafs` | **NOT BOOTSTRAPPABLE** | 295s | `openafs-modules-dkms` fails to build against `6.17.0-1022-azure` |
+| `cephfs` | **NOT BOOTSTRAPPABLE** | 382s | The all-in-one demo container starts, the cluster never becomes responsive |
+| `lustre-client` | **NOT BOOTSTRAPPABLE** | 15s / 0s | 22.04: no `lustre-client-modules-dkms` in the ubuntu2204 repo. 24.04: no ubuntu2404 client repo at all |
+
+Three of those measurements are worth pulling out, because they change
+what the rows would be *for*:
+
+- **CIFS is both crippled and SQLite-hostile.** It is the only candidate
+  that fails `sqlite-wal` *and* `sqlite-delete-mode`, which is precisely
+  the [Samba report][smb1] and the same mechanism as the Lustre one --
+  reproduced locally, in 26 seconds, with no HPC site involved.
+- **sshfs quantises timestamps to a second.** Everything else on this
+  list resolves five rapid creates into five distinct mtimes; sshfs
+  resolves them into one. That is the shape of bug that makes git's
+  racy-timestamp handling matter, and no filesystem currently in the
+  matrix exhibits it.
+- **`ntfs3` is not vfat.** The in-kernel NTFS driver reports symlinks,
+  mode bits and xattrs, so it would *not* be a second crippled-filesystem
+  row -- it would be a row testing a driver users reach through WSL and
+  external drives, with POSIX mostly intact.
+
+Also worth recording as a negative: **every single-node filesystem here
+passes `link-eexist`**, the POSIX rule Lustre is reported to break. The
+check is cheap and stays in the probe, but nothing reachable from a
+runner reproduces that particular Lustre behaviour -- if we want it
+tested, it has to be Lustre.
 
 ## Part 3 -- the two that were asked about
 
@@ -188,17 +237,33 @@ on a stock runner in under a minute.
 - **`loop --fs gfs2`** and **`loop --fs ocfs2`**. Cluster-filesystem
   locking, no cluster. Already implemented in `bin/eval-under-loop`.
 
-**Tier 2 -- cheap, and they widen the crippled-filesystem axis.**
-`loop --fs exfat` and `loop --fs ntfs3` sit next to the existing vfat row
-and are what WSL and USB-drive users actually have. `sshfs` and
-`s3-rclone` cover the FUSE shapes; both bootstrap in under a minute.
+**Tier 2 -- each adds an axis the matrix does not have yet.**
 
-**Tier 3 -- worth doing, not trivially.** `glusterfs` (bootstraps, but
-needs its own backend rather than a loop flavour), `cephfs`, and Lustre
-via the Vagrant route above.
+- **`sshfs`**, for the timestamp granularity alone: one distinct mtime
+  where every other filesystem here gives five. Nothing in the current
+  matrix tests what a coarse clock does to git's racy-timestamp
+  handling.
+- **`loop --fs exfat`**, the crippled row that is *not* vfat: it also
+  rejects `:`, `*` and `?` in filenames, which vfat-with-defaults does
+  not surface, and it is what is on every USB drive.
+- **`loop --fs ntfs3`**, which the probe shows is *not* a crippled
+  filesystem -- symlinks, mode bits and xattrs all work. That makes it a
+  test of the in-kernel NTFS driver users reach through WSL and external
+  drives, not a second vfat.
+- **`s3-rclone`**, object storage seen as a filesystem: crippled in the
+  exfat shape but with SQLite working, which is a combination nothing
+  else on the list produces.
 
-**Not feasible here.** GPFS (license), and any Lustre coverage that
-depends on a stock GitHub runner's kernel.
+**Tier 3 -- worth doing, not trivially.** `glusterfs` bootstraps in 18s
+and shows a clean POSIX profile, so the interesting question there is
+what `git annex test` does to it, not whether it runs -- but it needs
+its own `bin/eval-under-glusterfs` rather than a loop flavour. `cephfs`
+and Lustre both need more machine than a runner gives (see above).
+
+**Not feasible on GitHub-hosted runners.** GPFS (license), Lustre and
+OpenAFS (out-of-tree modules that do not build against the runners'
+Azure kernels). All three are feasible in a VM or on a self-hosted
+runner, which is the same conclusion arrived at three different ways.
 
 ### Promoting a candidate to a matrix row
 
@@ -236,16 +301,22 @@ run on every push to every backend.
 
 ## Part 5 -- what this does not cover
 
-- **AFS.** No reports found either way; `openafs-modules-dkms` is in
-  Ubuntu, so the client-module half is probed. A server (a "cell") is
-  not.
+- **AFS.** No reports found either way, and the client half is now
+  measured as unavailable here: `openafs-modules-dkms` does not build
+  against the runner's `6.17.0-1022-azure` kernel. Same shape as Lustre,
+  same answer -- it needs a VM with a kernel the module supports.
 - **9p and virtiofs** -- the WSL2 and VM-shared-folder paths, and a real
   source of user reports. Both need a VM, so they land in the same
   bucket as Lustre.
 - **NFS variants.** Still the biggest gap, and it is about *options*
   rather than filesystems: v3 vs v4.x, `actimeo=0`, `nolock`, `sync`.
   See GOTCHAS.md, "Not yet covered".
-- **eCryptfs.** Probed and currently failing to mount on the runner; the
-  probe log says where it stops. Worth one more look, since it is the
-  filesystem behind Ubuntu's old encrypted-home feature and has a long
-  history of filename-length surprises.
+- **eCryptfs.** Probed; `mount -t ecryptfs` refuses the key options the
+  probe passes, so the bring-up is a scripting problem rather than a
+  proven impossibility. Worth one more look, since it is the filesystem
+  behind Ubuntu's old encrypted-home feature and has a long history of
+  filename-length surprises -- and `encfs`, which *does* come up, already
+  shows that shape (`long-name-255=no`).
+- **CephFS.** The demo container starts but the cluster never becomes
+  responsive inside the probe's budget on a 4-core runner. Not proven
+  impossible; proven not-cheap.
