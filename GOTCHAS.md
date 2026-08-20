@@ -87,6 +87,68 @@ So `--no-root-squash` (env: `EVAL_UNDER_NFS_NO_ROOT_SQUASH`) exports with
 user would. The loop and BeeGFS backends already run the wrapped command
 as root, so the flag is a no-op there.
 
+### sshfs (`bin/eval-under-sshfs`)
+
+A throwaway sshd is started on the first free port at or above 2222 --
+its own host key, its own `authorized_keys`, its own pid file, all inside
+the run's scratch directory -- and a fresh backing directory is
+sshfs-mounted back over it. The system sshd is not used and
+`~/.ssh/authorized_keys` is never written to. With `--host` it mounts a
+real remote instead, using the caller's ssh config.
+
+| Knob | Value | Why |
+| --- | --- | --- |
+| Port | first free `>= 2222` | Two runs at once (a reproduction while a suite is going, two CI cells on one runner) must not collide. `--port` pins it. |
+| `-o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3` | always | A dropped connection should fail the command, not wedge it forever. |
+| `-o cache=no` | only with `--no-cache` | sshfs caches attributes by default, which hides stale-stat behaviour. Off is the honest mount; on is what users actually have. |
+| `-o workaround=rename` | only with `--workaround rename` | Makes sshfs emulate rename-over-existing by unlinking first -- non-atomic, which is what SFTP servers without the POSIX-rename extension force. |
+| Mount/command user | the invoking user | A FUSE mount belongs to whoever ran `sshfs`; root cannot read it without `allow_other`. Same treatment `eval-under-nfs` gives `root_squash`. |
+
+**Hardlinks exist but are not observable, and that is the whole story
+for git-annex.** `ln a b` succeeds over SFTP, and then `a` and `b` report
+*different* inode numbers and `nlink=1` each:
+
+```
+ext4     name=a ino=1884275 nlink=2      name=b ino=1884275 nlink=2
+sshfs    name=a ino=3       nlink=1      name=b ino=4       nlink=1
+```
+
+This is not a misconfiguration. SFTP has no way to express that two
+names share an inode, and sshfs 3.x has no option to change it
+(`use_ino` was FUSE2; sshfs 3.7 offers only `disable_hardlink`, which
+goes the other way). The capability probe reports it as
+`hardlink-same-inode=no` / `hardlink-nlink=no` while `hardlink=yes` --
+which is exactly why those two checks exist. `hardlink` alone called
+sshfs healthy.
+
+What it costs, measured with git-annex 10.20240129:
+
+- `git annex add` on a **locked** branch: fine. The file becomes a
+  symlink into `.git/annex/objects`, and symlinks work.
+- `git annex add` on an **adjusted unlocked** branch: **fails** --
+  `foo failed to link to annex`. add hardlinks the content into the
+  annex and then verifies the link, and the verification cannot succeed
+  on a filesystem where the link is invisible.
+- `git clone` of a local repo: **fails** --
+  `fatal: hardlink different from source at '...'`. git's local-clone
+  path hardlinks objects and runs the same check.
+
+So: locked repos work, and so do v10 *unlocked* (pointer-file) repos --
+it is specifically the **adjusted unlocked branch** that breaks. In
+`git annex test`, that variant's Init Tests group fails 11 of 12 once
+`add` fails, so a single root cause shows up as a wall of red. That
+matters for DataLad specifically, which leans on adjusted branches far
+more than bare git-annex does.
+
+**Timestamps are quantised to the second.** Five files created back to
+back get one or two distinct mtimes, where every other filesystem
+measured gives five. Nothing else in the matrix has a clock this coarse,
+which makes sshfs the row that exercises git's racy-timestamp handling.
+
+**No fifos, no unix sockets.** git-annex says so itself at init
+("Detected a filesystem without fifo support") and adapts. Worth knowing
+before reading it as a failure.
+
 ### BeeGFS (`bin/eval-under-beegfs`)
 
 A containerised cluster (`fixtures/beegfs/docker-compose-v{7,8}.yml`) plus
