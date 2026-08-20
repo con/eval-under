@@ -227,24 +227,29 @@ setup_glusterfs() {
 setup_cephfs() {
     command -v docker >/dev/null || give_up "no docker" || return 1
     apt_install ceph-common ceph-fuse || give_up "ceph-common not installable" || return 1
-    sudo docker run -d --name eu-ceph --net=host \
+    # `docker run -d` pulls first, and the demo image is about a gigabyte.
+    timeout 420 sudo docker run -d --name eu-ceph --net=host \
         -e MON_IP=127.0.0.1 -e CEPH_PUBLIC_NETWORK=127.0.0.1/32 \
         -e CEPH_DEMO_UID=eu -e DEMO_DAEMONS="mon,mgr,osd,mds" \
         -v /etc/ceph:/etc/ceph -v /var/lib/ceph:/var/lib/ceph \
-        quay.io/ceph/demo || give_up "ceph demo container did not start" || return 1
+        quay.io/ceph/demo || give_up "ceph demo container did not start in 7min" || return 1
     defer "sudo docker rm -f eu-ceph; sudo rm -rf /etc/ceph/* /var/lib/ceph/*"
+    # Every ceph client call needs its own timeout. With no reachable mon,
+    # `ceph -s` blocks for minutes on its internal retry loop rather than
+    # failing -- which is what turned this probe into a 25-minute job that
+    # held the roll-up hostage.
     local i
-    for i in $(seq 1 48); do
-        [ -f /etc/ceph/ceph.conf ] && sudo ceph -s >/dev/null 2>&1 && break
+    for i in $(seq 1 24); do
+        [ -f /etc/ceph/ceph.conf ] \
+            && timeout 15 sudo ceph --connect-timeout 10 -s >/dev/null 2>&1 && break
         sleep 5
-        # 4 minutes. Longer than this and the answer is "not on a runner",
-        # which is a verdict -- not a reason to hold the whole run open
-        # until the job timeout fires.
-        [ "$i" = 48 ] && { sudo docker logs --tail 30 eu-ceph 2>&1 || true
-                           give_up "ceph cluster never became responsive in 4min"; return 1; }
+        # ~2 minutes of polling on top of the pull. Longer than that and
+        # the answer is "not on a runner", which is a verdict.
+        [ "$i" = 24 ] && { sudo docker logs --tail 30 eu-ceph 2>&1 || true
+                           give_up "ceph cluster never became responsive"; return 1; }
     done
-    sudo ceph -s || true
-    sudo ceph-fuse "$MNT" || give_up "ceph-fuse mount failed" || return 1
+    timeout 20 sudo ceph -s || true
+    timeout 60 sudo ceph-fuse "$MNT" || give_up "ceph-fuse mount failed" || return 1
     defer "sudo umount -l $MNT"
     sudo chown "$(id -u):$(id -g)" "$MNT" || true
 }
