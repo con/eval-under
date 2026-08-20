@@ -54,6 +54,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # actions/upload-artifact rejects '/' in artifact names, and the NFS
+      # backend's version is the literal "n/a". bin/ci/matrix.sh owns how a
+      # cell is named; don't reimplement its "n/a" handling in expression
+      # syntax here.
+      - name: Compute cell slug
+        id: cell
+        run: >-
+          echo "slug=$(bin/ci/cell-slug.sh
+          '${{ inputs.backend }}' '${{ inputs.backend-version }}' '${{ inputs.target }}')"
+          >> "$GITHUB_OUTPUT"
+
       - name: Install backend client dependencies
         run: bin/ci/install-backend.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
 
@@ -88,7 +99,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ inputs.backend }}-${{ inputs.backend-version }}-${{ inputs.target }}
+          name: logs-${{ steps.cell.outputs.slug }}
           path: |
             /var/log/beegfs-*
             /opt/eval-under-src/git/t/test-results/**

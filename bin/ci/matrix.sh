@@ -68,6 +68,21 @@ backend_slug() {
     fi
 }
 
+# Filename-safe identifier for a whole matrix cell: "beegfs-7.4.6-git",
+# "nfs-pjdfstest", "loop-vfat-stress-ng".
+#
+# Exists because the NFS backend's version is the literal "n/a", and a
+# naive "<backend>-<version>-<target>" therefore contains a slash.
+# actions/upload-artifact rejects slashes in artifact names outright, so
+# `logs-nfs-n/a-git` is a hard error -- one that stayed invisible until
+# the git target started producing files to upload at all (before that,
+# `if-no-files-found: ignore` short-circuited before the name was ever
+# validated).
+cell_slug() {
+    local backend="$1" version="$2" target="$3"
+    echo "$(backend_slug "$backend" "$version")-$target"
+}
+
 target_known() {
     local t
     for t in "${EVAL_UNDER_TARGETS[@]}"; do
