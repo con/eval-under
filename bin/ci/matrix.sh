@@ -131,6 +131,22 @@ target_cron_minute() {
     esac
 }
 
+# Does this target need to run as root to mean anything?
+#
+# pjdfstest is half privileged-vs-unprivileged assertions and refuses to
+# run otherwise; stress-ng's chown/mknod stressors need CAP_CHOWN /
+# CAP_MKNOD. The loop and beegfs backends already run the wrapped command
+# as root, but the NFS backend deliberately drops back to the invoking
+# user and exports with root_squash -- which is exactly right for
+# git-annex/git and useless for these two. run-under.sh passes
+# --no-root-squash for them.
+target_needs_root() {
+    case "$1" in
+        pjdfstest|stress-ng) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Does this target need the git-annex daily build installed on the runner?
 target_needs_git_annex() {
     [ "$1" = "git-annex" ]

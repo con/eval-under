@@ -38,8 +38,17 @@ case "$BACKEND" in
         sudo dmesg | grep -i beegfs | tail -50 || true
         ;;
     nfs|loop)
-        echo "=== dmesg (last 100) ==="
-        sudo dmesg | tail -100 || true
+        # Filtered rather than `dmesg | tail -100`: on a hosted runner the
+        # last 100 kernel lines are almost entirely boot spam (hyperv, pci,
+        # apparmor), which buries the failure in the job log. Warnings and
+        # errors plus anything naming the filesystem under test is what
+        # actually matters here.
+        echo "=== dmesg (warnings and errors, last 40) ==="
+        sudo dmesg --level=emerg,alert,crit,err,warn 2>/dev/null | tail -40 || true
+        echo "=== dmesg (mentioning $BACKEND/$VERSION, last 30) ==="
+        sudo dmesg 2>/dev/null \
+            | grep -iE "loop|nfs|${VERSION:-nomatch}" \
+            | tail -30 || true
         ;;
     *)
         echo "unknown backend: $BACKEND" >&2

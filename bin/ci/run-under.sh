@@ -54,7 +54,11 @@ case "$BACKEND" in
     beegfs) opts=(--version "$VERSION") ;;
     loop)   opts=(--fs "$VERSION"
                   --size "${EVAL_UNDER_LOOP_SIZE_MB:-$(target_loop_size_mb "$TARGET")}") ;;
-    nfs)    opts=() ;;
+    nfs)    opts=()
+            # See target_needs_root() in matrix.sh: root-requiring suites
+            # need an export that does not squash root, and need to keep
+            # their privileges rather than being dropped to the invoker.
+            target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
 
