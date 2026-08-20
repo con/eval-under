@@ -22,6 +22,7 @@ MNT="${EVAL_UNDER_MOUNT:-/mnt/beegfs}"
 DATA_ROOT="${EVAL_UNDER_BEEGFS_DATA_ROOT:-/beegfs}"
 VERSION="${EVAL_UNDER_BEEGFS_VERSION:-7.4.6}"
 STARTUP_WAIT="${EVAL_UNDER_BEEGFS_STARTUP_WAIT:-60}"
+MOUNT_READY_WAIT="${EVAL_UNDER_BEEGFS_MOUNT_READY_WAIT:-60}"
 KEEP="${EVAL_UNDER_KEEP:-0}"
 SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 
@@ -62,6 +63,11 @@ Options (flag / env var / default / purpose):
       Seconds to wait for mgmtd(8008) + meta(8005) + storage(8003) to
       bind before giving up.
 
+  --mount-ready-wait S EVAL_UNDER_BEEGFS_MOUNT_READY_WAIT 60
+      How long to keep probing a freshly-mounted BeeGFS with a real
+      create+write before giving up. mount(8) returning is not the same
+      as the mount being usable -- see wait_for_mount_usable().
+
   -h, --help
       Print this help.
 
@@ -84,6 +90,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2 ;;
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --startup-wait) STARTUP_WAIT="$2"; shift 2 ;;
+    --mount-ready-wait) MOUNT_READY_WAIT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
@@ -199,10 +206,48 @@ start_helperd() {
   exit 5
 }
 
+# `mount -t beegfs` returns as soon as the client module has registered
+# with mgmtd and downloaded the node groups -- which is *not* the same as
+# its connections to the meta and storage nodes being usable. The kernel
+# happily logs "BeeGFS mount ready" and the very next metadata operation
+# then fails with ECOMM ("Communication error on send").
+#
+# That is a race, so it shows up as a cell that was green last run and is
+# red this one, with a one-line error and no suite output at all -- the
+# most expensive kind of red to debug, because it looks like a finding
+# about the filesystem and is not.
+#
+# start_cluster() already waits for the three daemons to bind, but a
+# listening port only proves the server side is up. The client side needs
+# its own probe, and it has to be a real operation: create + write + read
+# back exercises the meta node (create) and a storage target (write), so
+# a success means the mount can actually do work.
+wait_for_mount_usable() {
+  local probe="$MNT/.eval-under-ready.$$"
+  local waited=0 err=""
+  log "probing mount usability (up to ${MOUNT_READY_WAIT}s)"
+  while [ "$waited" -lt "$MOUNT_READY_WAIT" ]; do
+    if err=$("${SUDO[@]}" dd if=/dev/urandom of="$probe" bs=4k count=1 2>&1) \
+      && err=$("${SUDO[@]}" dd if="$probe" of=/dev/null bs=4k count=1 2>&1); then
+      "${SUDO[@]}" rm -f "$probe" 2>/dev/null || true
+      log "mount is usable (after ${waited}s)"
+      return 0
+    fi
+    "${SUDO[@]}" rm -f "$probe" 2>/dev/null || true
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "ERROR: BeeGFS mounted at $MNT but unusable after ${MOUNT_READY_WAIT}s" >&2
+  echo "       last probe error: $err" >&2
+  "${SUDO[@]}" dmesg 2>/dev/null | grep -i beegfs | tail -30 >&2 || true
+  exit 6
+}
+
 mount_beegfs() {
   log "mounting BeeGFS at $MNT"
   "${SUDO[@]}" mkdir -p "$MNT"
   "${SUDO[@]}" mount -t beegfs beegfs_nodev "$MNT" -o "cfgFile=$CONF_ACTIVE"
+  wait_for_mount_usable
   "${SUDO[@]}" chown "$(id -u):$(id -g)" "$MNT"
   "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
 }

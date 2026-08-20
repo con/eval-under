@@ -180,6 +180,32 @@ layers on top, or in the syscalls the pjdfstest column is flagging.
 Pre-dates the matrix; ext4 is the control row, so this one *is* a real
 bug worth chasing rather than a filesystem property.
 
+## Red that is not a finding
+
+Distinct from the cells above: these are harness races, and the fix is in
+this repo rather than in anything under test.
+
+### BeeGFS: `chown: cannot access '/mnt/beegfs': Communication error on send`
+
+`mount -t beegfs` returns as soon as the client module has registered
+with mgmtd and downloaded the node groups. That is not the same as its
+connections to the meta and storage nodes being usable: the kernel logs
+`BeeGFS mount ready` and the very next metadata operation can still fail
+with `ECOMM`. `start_cluster()` waiting for the three daemons to bind
+does not help -- a listening port only proves the *server* side is up.
+
+It presents as a cell that was green last run and red this one, with a
+single-line error and no suite output at all, which reads like a finding
+about the filesystem and is not.
+
+`wait_for_mount_usable()` in `bin/eval-under-beegfs` now probes a fresh
+mount with a real create + write + read-back (meta node for the create, a
+storage target for the write) and only proceeds once that succeeds, up to
+`--mount-ready-wait` / `EVAL_UNDER_BEEGFS_MOUNT_READY_WAIT` seconds. If
+it ever does time out, the error carries the last probe failure and a
+`dmesg | grep beegfs` tail, so the next occurrence is diagnosable from
+the job log alone.
+
 ## Reading a red cell
 
 1. Look at the summary block at the end of the job log. Every target
