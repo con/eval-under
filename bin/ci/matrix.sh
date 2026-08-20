@@ -23,6 +23,15 @@
 # Order matters: it is the column order of the README CI matrix.
 EVAL_UNDER_TARGETS=(git-annex git stress-ng pjdfstest)
 
+# Targets that are valid to run, but are deliberately NOT matrix columns:
+# they exist for on-demand reproduction (.github/workflows/reproduce.yaml)
+# rather than for a weekly badge. Keeping them out of EVAL_UNDER_TARGETS
+# is what stops gen-dispatchers.sh from generating cells for them.
+#
+#   capabilities  bin/ci/fs-capabilities.sh under the backend: seconds,
+#                 and usually explains a suite result before you run it
+EVAL_UNDER_ONDEMAND_TARGETS=(capabilities)
+
 # Backend cells, "<backend>|<version>|<README row label>". Order matters:
 # it is the row order of the README CI matrix. Version is the literal
 # "n/a" for backends with nothing to pin (see bin/ci/install-backend.sh).
@@ -70,7 +79,7 @@ backend_slug() {
 
 target_known() {
     local t
-    for t in "${EVAL_UNDER_TARGETS[@]}"; do
+    for t in "${EVAL_UNDER_TARGETS[@]}" "${EVAL_UNDER_ONDEMAND_TARGETS[@]}"; do
         [ "$t" = "$1" ] && return 0
     done
     return 1
@@ -83,6 +92,7 @@ target_label() {
         git)       echo "git testsuite" ;;
         stress-ng) echo "stress-ng" ;;
         pjdfstest) echo "pjdfstest" ;;
+        capabilities) echo "capability profile" ;;
         *)         echo "$1" ;;
     esac
 }
@@ -99,6 +109,9 @@ target_timeout() {
         # ~8500 assertions, run serially; ext4 does it in minutes but a
         # sync-heavy NFS or BeeGFS mount is an order of magnitude slower.
         pjdfstest) echo 2400 ;;
+        # Tens of syscalls. If it has not finished in 5 minutes the
+        # filesystem is hanging, which is itself the answer.
+        capabilities) echo 300 ;;
         *)         echo 1800 ;;
     esac
 }
@@ -115,6 +128,7 @@ target_loop_size_mb() {
         # source + destination, so 512 leaves uncomfortably little slack.
         stress-ng) echo 768 ;;
         pjdfstest) echo 256 ;;
+        capabilities) echo 100 ;;
         *)         echo 100 ;;
     esac
 }

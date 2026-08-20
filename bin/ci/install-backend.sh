@@ -9,17 +9,18 @@
 # usage:
 #   bin/ci/install-backend.sh <backend> <version>
 #
-#   backend  = beegfs | nfs | loop
+#   backend  = beegfs | nfs | loop | sshfs
 #   version  = for beegfs: point release (e.g. 7.4.6, 8.1.0)
 #              for loop:   filesystem type (e.g. vfat, ext4, xfs, btrfs)
 #              for nfs:    literal "n/a"
+#              for sshfs:  literal "n/a"
 #
 # Idempotent enough for CI re-runs; not a full package manager.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-BACKEND="${1:?backend required (beegfs|nfs|loop)}"
+BACKEND="${1:?backend required (beegfs|nfs|loop|sshfs)}"
 VERSION="${2:?version required (BeeGFS version | loop fs name | 'n/a' for nfs)}"
 
 # Give unattended-upgrades a moment on ubuntu-22.04 runners rather than
@@ -72,6 +73,18 @@ install_nfs() {
     command -v exportfs
 }
 
+install_sshfs() {
+    apt_update
+    # openssh-sftp-server is what actually serves the mount; on Ubuntu it
+    # is pulled in by openssh-server, but name it so a slimmer image
+    # cannot leave us without an sftp-server binary.
+    apt_install sshfs openssh-server openssh-sftp-server
+    command -v sshfs
+    # The backend starts its own sshd, so the system one need not run --
+    # but its privilege-separation directory must exist.
+    sudo mkdir -p /run/sshd
+}
+
 install_loop() {
     local pkg
     case "$VERSION" in
@@ -109,5 +122,6 @@ case "$BACKEND" in
     beegfs) install_beegfs ;;
     nfs)    install_nfs ;;
     loop)   install_loop ;;
-    *) echo "unknown backend: $BACKEND (expected beegfs|nfs|loop)" >&2; exit 1 ;;
+    sshfs)  install_sshfs ;;
+    *) echo "unknown backend: $BACKEND (expected beegfs|nfs|loop|sshfs)" >&2; exit 1 ;;
 esac

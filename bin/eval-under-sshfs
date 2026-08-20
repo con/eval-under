@@ -1,0 +1,344 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code
+#
+# eval-under-sshfs: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
+# optionally HOME) pointing at an sshfs (FUSE-over-SFTP) mount.
+#
+# Backend of the eval-under framework.
+#
+# Two modes:
+#
+#   loopback (default) -- brings up a throwaway sshd on a high port, with
+#       its own host key and its own authorized_keys, and sshfs-mounts a
+#       fresh backing directory back over it. Nothing outside the scratch
+#       dir is touched: the user's ~/.ssh is never written to.
+#
+#   remote (--host) -- sshfs-mounts a directory on a host you name, using
+#       your existing ssh config/agent. For reproducing a reporter's
+#       actual setup, where the interesting variable is often their
+#       server's SFTP implementation rather than sshfs itself.
+
+set -eu
+
+MNT="${EVAL_UNDER_MOUNT:-/mnt/sshfs}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
+# Loopback-mode knobs.
+PORT="${EVAL_UNDER_SSHFS_PORT:-2222}"
+# Remote mode: unset means loopback.
+HOST="${EVAL_UNDER_SSHFS_HOST:-}"
+REMOTE_USER="${EVAL_UNDER_SSHFS_USER:-}"
+REMOTE_DIR="${EVAL_UNDER_SSHFS_DIR:-}"
+
+# sshfs -o options. EVAL_UNDER_SSHFS_OPTS is a comma-separated string
+# appended after ours, so a caller can override any default we set.
+EXTRA_OPTS="${EVAL_UNDER_SSHFS_OPTS:-}"
+NO_CACHE="${EVAL_UNDER_SSHFS_NO_CACHE:-0}"
+WORKAROUND="${EVAL_UNDER_SSHFS_WORKAROUND:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: eval-under-sshfs [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at an sshfs mount.
+
+By default this is a loopback mount: a throwaway sshd is started on a
+high port with its own host key and its own authorized_keys file, and a
+fresh backing directory is sshfs-mounted back over it. Your ~/.ssh is
+not read or written. With --host, mounts a remote directory instead,
+using your normal ssh configuration.
+
+Requires the `sshfs` package (and, for loopback mode, `openssh-server`).
+Install with: apt install sshfs openssh-server
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT              /mnt/sshfs
+      Where to mount sshfs on the host.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT      (unset)
+      Also set HOME=<mount>/home for the wrapped command.
+
+  --keep               EVAL_UNDER_KEEP               (unset)
+      Skip teardown; leave the mount (and the throwaway sshd) up for
+      debugging.
+
+  --port N             EVAL_UNDER_SSHFS_PORT         2222
+      Port for the throwaway sshd (loopback mode only).
+
+  --host HOST          EVAL_UNDER_SSHFS_HOST         (unset)
+      Mount from a remote host instead of starting a local sshd. Uses
+      your ssh config, keys and agent as-is. Implies that --port refers
+      to that host's sshd.
+
+  --user USER          EVAL_UNDER_SSHFS_USER         (invoking user)
+      Remote username.
+
+  --remote-dir PATH    EVAL_UNDER_SSHFS_DIR          (remote: required)
+      Directory on the remote host to mount. In loopback mode this
+      defaults to a fresh scratch directory and should be left alone.
+
+  --no-cache           EVAL_UNDER_SSHFS_NO_CACHE     (unset)
+      Pass `-o cache=no`. sshfs caches attributes and directory listings
+      by default, which papers over exactly the stale-stat behaviour a
+      reporter may be hitting. Turn the cache off to see the raw
+      protocol semantics.
+
+  --workaround LIST    EVAL_UNDER_SSHFS_WORKAROUND   (unset)
+      Pass `-o workaround=LIST` (sshfs's own compatibility switches,
+      e.g. `rename`, `truncate`, `buflimit`). `rename` is the
+      interesting one here: it makes sshfs emulate rename-over-existing
+      by unlinking the destination first, which is what it has to do
+      against SFTP servers lacking the POSIX-rename extension -- a
+      non-atomic rename, and precisely the semantics git and git-annex
+      assume they can rely on.
+
+  --opt OPTS           EVAL_UNDER_SSHFS_OPTS         (unset)
+      Extra comma-separated `-o` options, appended last so they win.
+      May be given more than once.
+
+  -h, --help
+      Print this help.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Exit status: the wrapped command's exit status. Teardown runs on any
+exit (unless --keep).
+
+Examples:
+
+  # git-annex test over loopback sshfs, cache off
+  sudo bin/eval-under sshfs --no-cache --set-home -- \
+    bash -c 'cd "$HOME" && git init t && cd t && git annex init && git annex test'
+
+  # Reproduce non-atomic rename-over-existing
+  sudo bin/eval-under sshfs --workaround rename --set-home -- some-command
+
+  # Against a reporter's own server
+  sudo bin/eval-under sshfs --host store.example.org --remote-dir /data/scratch \
+    --set-home -- git annex fsck
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    --port) PORT="$2"; shift 2 ;;
+    --host) HOST="$2"; shift 2 ;;
+    --user) REMOTE_USER="$2"; shift 2 ;;
+    --remote-dir) REMOTE_DIR="$2"; shift 2 ;;
+    --no-cache) NO_CACHE=1; shift ;;
+    --workaround) WORKAROUND="$2"; shift 2 ;;
+    --opt) EXTRA_OPTS="${EXTRA_OPTS:+$EXTRA_OPTS,}$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || {
+    echo "must run as root (or have sudo available)" >&2; exit 2; }
+  SUDO=(sudo)
+else
+  SUDO=()
+fi
+
+# The FUSE mount belongs to whoever runs sshfs, and the wrapped command
+# has to be able to read it. Both therefore run as the invoking user --
+# the same treatment bin/eval-under-nfs gives root_squash.
+if [ -n "${SUDO_UID:-}" ]; then
+  INVOKER_UID="$SUDO_UID"; INVOKER_GID="${SUDO_GID:-$SUDO_UID}"
+  INVOKER_USER="${SUDO_USER:-$INVOKER_UID}"
+else
+  INVOKER_UID="$(id -u)"; INVOKER_GID="$(id -g)"
+  INVOKER_USER="$(id -un)"
+fi
+
+# Run something as the invoking user, or directly if we already are them.
+as_invoker() {
+  if [ "$INVOKER_UID" != "$(id -u)" ]; then
+    "${SUDO[@]}" -u "$INVOKER_USER" "$@"
+  else
+    "$@"
+  fi
+}
+
+log() { printf '\nI: %s\n' "$*"; }
+
+command -v sshfs >/dev/null 2>&1 || {
+  echo "ERROR: sshfs not installed. Install with: apt install sshfs" >&2
+  exit 3
+}
+
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/eval-under-sshfs-XXXXX")"
+chmod 755 "$SCRATCH"
+SSHD_PID=""
+
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving mount up (exit=$rc)"
+    echo "I:   mount:   $MNT"
+    echo "I:   scratch: $SCRATCH"
+    [ -n "$SSHD_PID" ] && echo "I:   sshd pid: $SSHD_PID (kill it yourself)"
+    return "$rc"
+  fi
+  log "teardown"
+  # fusermount as the mount's owner; fall back to a lazy root umount.
+  as_invoker fusermount3 -u "$MNT" 2>/dev/null \
+    || as_invoker fusermount -u "$MNT" 2>/dev/null \
+    || "${SUDO[@]}" umount -l "$MNT" 2>/dev/null
+  # Kill the whole process group: the daemon forks a child per
+  # connection, and killing only the listener leaves those behind
+  # holding the port.
+  [ -n "$SSHD_PID" ] && { "${SUDO[@]}" kill -- "-$SSHD_PID" 2>/dev/null \
+    || "${SUDO[@]}" kill "$SSHD_PID" 2>/dev/null; }
+  "${SUDO[@]}" rm -rf "$MNT" "$SCRATCH" 2>/dev/null
+  return "$rc"
+}
+trap teardown EXIT
+
+find_sftp_server() {
+  local p
+  for p in /usr/lib/openssh/sftp-server \
+           /usr/libexec/openssh/sftp-server \
+           /usr/lib/ssh/sftp-server \
+           /usr/libexec/sftp-server; do
+    [ -x "$p" ] && { echo "$p"; return 0; }
+  done
+  return 1
+}
+
+# Bring up an sshd that exists only for this run: own port, own host key,
+# own authorized_keys, own pid file. Deliberately NOT the system sshd --
+# we would otherwise have to append to the user's authorized_keys and
+# hope teardown removes it again.
+start_local_sshd() {
+  local sftp_server sshd_bin
+  sshd_bin="$(command -v sshd || echo /usr/sbin/sshd)"
+  [ -x "$sshd_bin" ] || {
+    echo "ERROR: sshd not found. Install with: apt install openssh-server" >&2
+    exit 3
+  }
+  sftp_server="$(find_sftp_server)" || {
+    echo "ERROR: no sftp-server binary found (openssh-sftp-server?)" >&2
+    exit 3
+  }
+
+  as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/id" -C eval-under-sshfs
+  as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/hostkey" -C eval-under-sshfs-host
+  as_invoker cp "$SCRATCH/id.pub" "$SCRATCH/authorized_keys"
+  chmod 600 "$SCRATCH/authorized_keys"
+
+  cat > "$SCRATCH/sshd_config" <<EOF
+Port $PORT
+ListenAddress 127.0.0.1
+HostKey $SCRATCH/hostkey
+PidFile $SCRATCH/sshd.pid
+AuthorizedKeysFile $SCRATCH/authorized_keys
+# The scratch dir lives under TMPDIR and is not mode 700, which
+# StrictModes would refuse. This sshd is reachable on loopback only and
+# accepts exactly one key, so the check buys nothing here.
+StrictModes no
+UsePAM no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin yes
+AllowUsers $INVOKER_USER
+Subsystem sftp $sftp_server
+EOF
+
+  # sshd refuses to start without its privilege-separation directory,
+  # which is absent in minimal containers (it is created at boot by the
+  # packaging, not by the package install).
+  "${SUDO[@]}" mkdir -p /run/sshd
+
+  log "starting throwaway sshd on 127.0.0.1:$PORT"
+  # Run it as root so any AllowUsers target can log in; it is bound to
+  # loopback and accepts a single ephemeral key.
+  "${SUDO[@]}" "$sshd_bin" -f "$SCRATCH/sshd_config"
+  local waited=0
+  while [ ! -s "$SCRATCH/sshd.pid" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  [ -s "$SCRATCH/sshd.pid" ] || { echo "ERROR: sshd did not start" >&2; exit 3; }
+  SSHD_PID="$(cat "$SCRATCH/sshd.pid")"
+  log "sshd pid $SSHD_PID"
+}
+
+# Assemble the -o list. Ours first, caller's last so theirs wins.
+build_opts() {
+  local opts="reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
+  if [ -z "$HOST" ]; then
+    # Loopback: a throwaway host key we just generated is not worth
+    # recording, and would collide on the next run.
+    opts="$opts,IdentityFile=$SCRATCH/id,IdentitiesOnly=yes"
+    opts="$opts,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null"
+  fi
+  [ "$NO_CACHE" != 0 ] && opts="$opts,cache=no"
+  [ -n "$WORKAROUND" ] && opts="$opts,workaround=$WORKAROUND"
+  [ -n "$EXTRA_OPTS" ] && opts="$opts,$EXTRA_OPTS"
+  echo "$opts"
+}
+
+mount_sshfs() {
+  local spec opts
+  opts="$(build_opts)"
+
+  if [ -z "$HOST" ]; then
+    start_local_sshd
+    REMOTE_DIR="${REMOTE_DIR:-$SCRATCH/backing}"
+    as_invoker mkdir -p "$REMOTE_DIR"
+    spec="${REMOTE_USER:-$INVOKER_USER}@127.0.0.1:$REMOTE_DIR"
+  else
+    [ -n "$REMOTE_DIR" ] || {
+      echo "ERROR: --host requires --remote-dir" >&2; exit 2; }
+    spec="${REMOTE_USER:-$INVOKER_USER}@$HOST:$REMOTE_DIR"
+  fi
+
+  "${SUDO[@]}" mkdir -p "$MNT"
+  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
+
+  log "sshfs -p $PORT -o $opts $spec $MNT"
+  as_invoker sshfs -p "$PORT" -o "$opts" "$spec" "$MNT"
+
+  # An sshfs mount can appear in the mount table before the first
+  # request round-trips. Touch it once so a failure surfaces here rather
+  # than inside the wrapped command.
+  as_invoker test -d "$MNT" || { echo "ERROR: mount not usable" >&2; exit 3; }
+  "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
+}
+
+mount_sshfs
+
+RUN_HOME="$HOME"
+if [ "$SET_HOME" = 1 ]; then
+  RUN_HOME="$MNT/home"
+  as_invoker mkdir -p "$RUN_HOME"
+fi
+
+if [ "$INVOKER_UID" != "$(id -u)" ]; then
+  log "running (as uid=$INVOKER_UID): $*"
+  "${SUDO[@]}" -u "$INVOKER_USER" -E \
+    env HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" \
+    "$@"
+else
+  log "running: $*"
+  HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" "$@"
+fi

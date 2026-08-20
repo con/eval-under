@@ -35,18 +35,35 @@ on:
       target:
         description: >-
           Test suite to run under the backend:
-          git-annex | git | stress-ng | pjdfstest.
+          git-annex | git | stress-ng | pjdfstest | capabilities.
         required: false
         default: "git-annex"
+        type: string
+      backend-options:
+        description: >-
+          Extra flags passed through to the backend script, word-split
+          (e.g. "--no-cache --workaround rename" for sshfs). Empty for
+          the scheduled matrix cells; used by reproduce.yaml to mirror a
+          reporter's mount options.
+        required: false
+        default: ""
+        type: string
+      runner:
+        description: >-
+          Runner image. Defaults to ubuntu-22.04 because BeeGFS DKMS
+          cannot build against the 24.04 image's kernel; backends without
+          an out-of-tree module can be run on either.
+        required: false
+        default: "ubuntu-22.04"
         type: string
 
 jobs:
   test:
-    # ubuntu-22.04: kernel 5.15/6.5, within BeeGFS 7.4.x and 8.x DKMS
-    # support. ubuntu-24.04 hosted runners ship 6.17-azure which BeeGFS
-    # kernel modules cannot build against. NFS + loop backends don't
-    # need this, but sharing the runner OS keeps the reusable simple.
-    runs-on: ubuntu-22.04
+    # Default ubuntu-22.04: kernel 5.15/6.5, within BeeGFS 7.4.x and 8.x
+    # DKMS support. ubuntu-24.04 hosted runners ship 6.17-azure which
+    # BeeGFS kernel modules cannot build against. NFS, loop and sshfs
+    # don't need this, so reproduce.yaml can point them at either image.
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -74,6 +91,8 @@ jobs:
           git config --global user.name  "GitHub Almighty"
 
       - name: Run ${{ inputs.target }} under ${{ inputs.backend }}
+        env:
+          EVAL_UNDER_BACKEND_OPTS: ${{ inputs.backend-options }}
         run: >-
           sudo -E bin/ci/run-under.sh
           "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
