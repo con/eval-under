@@ -1,0 +1,81 @@
+name: Probe candidate filesystems
+
+# Reconnaissance, not a test matrix: for each candidate filesystem, try
+# to stand up a throwaway instance on a stock GitHub-hosted runner and
+# report what it supports. Feeds the survey in FILESYSTEMS.md and
+# answers "is a bin/eval-under-<name> backend even possible here?"
+# before anyone writes one.
+#
+# A red cell here means "could not be brought up on this runner", which
+# is a finding. Read the job summary, not just the check mark.
+#
+# All logic lives in bin/ci/probe-backend.sh -- see .claude/CLAUDE.md.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "bin/ci/probe-backend.sh"
+      - "bin/ci/fs-capabilities.sh"
+      - ".github/workflows/probe-filesystems.yaml"
+
+concurrency:
+  group: probe-filesystems-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.candidate }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        candidate:
+          - gfs2
+          - ocfs2
+          - f2fs
+          - exfat
+          - ntfs3
+          - udf
+          - nilfs2
+          - bcachefs
+          - zfs
+          - overlay
+          - glusterfs
+          - cephfs
+          - cifs
+          - sshfs
+          - gocryptfs
+          - encfs
+          - ecryptfs
+          - s3-rclone
+          - lustre-client
+          - vm-only
+        include:
+          # Whamcloud publishes Lustre client packages per Ubuntu LTS,
+          # and 22.04 is the one with the longest support matrix -- so
+          # the client-module question gets asked on both images. The
+          # two cluster filesystems get the same treatment because their
+          # kernel modules live in linux-modules-extra, whose contents
+          # differ between runner images.
+          - os: ubuntu-22.04
+            candidate: lustre-client
+          - os: ubuntu-22.04
+            candidate: gfs2
+          - os: ubuntu-22.04
+            candidate: ocfs2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe ${{ matrix.candidate }}
+        run: bin/ci/probe-backend.sh "${{ matrix.candidate }}"
+
+      - name: Kernel ring buffer on failure
+        if: failure()
+        run: sudo dmesg | tail -50
