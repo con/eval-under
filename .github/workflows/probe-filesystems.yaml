@@ -55,6 +55,7 @@ jobs:
           - ecryptfs
           - s3-rclone
           - lustre-client
+          - openafs
           - vm-only
         include:
           # Whamcloud publishes Lustre client packages per Ubuntu LTS,
@@ -75,7 +76,3 @@ jobs:
 
       - name: Probe ${{ matrix.candidate }}
         run: bin/ci/probe-backend.sh "${{ matrix.candidate }}"
-
-      - name: Kernel ring buffer on failure
-        if: failure()
-        run: sudo dmesg | tail -50

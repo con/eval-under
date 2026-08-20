@@ -40,7 +40,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CANDIDATES=(
     gfs2 ocfs2 f2fs exfat ntfs3 udf nilfs2 bcachefs zfs overlay
     glusterfs cephfs cifs sshfs gocryptfs encfs ecryptfs s3-rclone
-    lustre-client vm-only
+    lustre-client openafs vm-only
 )
 
 usage() {
@@ -207,13 +207,18 @@ setup_glusterfs() {
     apt_install glusterfs-server || give_up "glusterfs-server not installable" || return 1
     sudo systemctl start glusterd || sudo glusterd || give_up "glusterd will not start" || return 1
     defer "sudo systemctl stop glusterd || true"
-    local brick="$PROBE_DIR/brick"
+    sudo systemctl --no-pager status glusterd 2>&1 | head -5 || true
+    local brick="$PROBE_DIR/brick" host
+    # Gluster records the brick's host in the volfile and insists it be a
+    # peer; the node's own hostname is always one, 127.0.0.1 need not be.
+    host="$(hostname -s)"
     sudo mkdir -p "$brick"
-    sudo gluster --mode=script volume create eu_probe "127.0.0.1:$brick" force \
-        || give_up "volume create failed" || return 1
+    sudo gluster --mode=script volume create eu_probe "$host:$brick" force \
+        || give_up "volume create failed (see output above)" || return 1
     defer "sudo gluster --mode=script volume stop eu_probe; sudo gluster --mode=script volume delete eu_probe"
     sudo gluster --mode=script volume start eu_probe || give_up "volume start failed" || return 1
-    mount_and_own -t glusterfs 127.0.0.1:/eu_probe "$MNT"
+    sudo gluster volume info eu_probe || true
+    mount_and_own -t glusterfs "$host:/eu_probe" "$MNT"
 }
 
 # CephFS via the upstream all-in-one demo container: a MON/MGR/OSD/MDS
@@ -304,8 +309,10 @@ setup_ecryptfs() {
     need_module ecryptfs || return 1
     local lower="$PROBE_DIR/ecryptfs-lower" sig
     sudo mkdir -p "$lower"
-    sig="$(printf 'eupassphrase' | sudo ecryptfs-add-passphrase --fnek 2>/dev/null \
-        | sed -n 's/.*\[\([0-9a-f]\{16\}\)\].*/\1/p' | head -1)"
+    local sigout
+    sigout="$(printf 'eupassphrase' | sudo ecryptfs-add-passphrase --fnek 2>&1)"
+    echo "I: ecryptfs-add-passphrase said: $sigout"
+    sig="$(echo "$sigout" | sed -n 's/.*\[\([0-9a-f]\{16\}\)\].*/\1/p' | head -1)"
     [ -n "$sig" ] || { give_up "ecryptfs-add-passphrase produced no signature"; return 1; }
     mount_and_own -t ecryptfs "$lower" "$MNT" \
         -o "key=passphrase:passphrase_passwd=eupassphrase,ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_sig=$sig,ecryptfs_unlink_sigs,no_sig_cache=yes"
@@ -353,6 +360,9 @@ setup_lustre_client() {
         give_up "no Whamcloud client repo for ubuntu${codename} (kernel $(uname -r))"
         return 1
     fi
+    echo "I: module packages published in that repo:"
+    curl -fsS "$repo/Packages" 2>/dev/null \
+        | sed -n 's/^Package: \(lustre-client-modules.*\)/  \1/p' | sort -u | head -20
     apt_install dkms "linux-headers-$(uname -r)" || return 1
     echo "deb [trusted=yes] $repo/ ./" | sudo tee /etc/apt/sources.list.d/lustre.list >/dev/null
     defer "sudo rm -f /etc/apt/sources.list.d/lustre.list"
@@ -362,6 +372,17 @@ setup_lustre_client() {
     NOTE="client modules load; no server (needs patched kernel or ZFS OSD)"
     # There is no filesystem to mount: a client without a server is as
     # far as a single runner goes. Report what we learned and stop.
+    return 2
+}
+
+# OpenAFS is the other out-of-tree client in this space, and unlike
+# Lustre it is packaged by Debian/Ubuntu themselves, so the module is
+# built by DKMS against whatever kernel the runner has.
+setup_openafs() {
+    apt_install dkms "linux-headers-$(uname -r)" openafs-modules-dkms openafs-client \
+        || give_up "openafs DKMS build failed on kernel $(uname -r)" || return 1
+    sudo modprobe openafs || give_up "openafs module built but will not load" || return 1
+    NOTE="client module builds and loads; a cell (server) is a separate problem"
     return 2
 }
 
@@ -402,6 +423,7 @@ case "$CANDIDATE" in
     ecryptfs)      setup_ecryptfs ;;
     s3-rclone)     setup_s3_rclone ;;
     lustre-client) setup_lustre_client ;;
+    openafs)       setup_openafs ;;
     vm-only)       setup_vm_only ;;
     *) echo "unknown candidate: $CANDIDATE" >&2; usage >&2; exit 2 ;;
 esac
@@ -435,6 +457,11 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         fi
     } >> "$GITHUB_STEP_SUMMARY"
 fi
+
+# One machine-readable line, last, so `tail` of a CI log carries the
+# entire finding without scrolling back through apt output.
+echo "SUMMARY|$CANDIDATE|$verdict|${elapsed}s|${NOTE:--}|$(echo "$caps" \
+    | grep -E '^[a-z0-9-]+=' | tr '\n' ' ')"
 
 # PARTIAL is a finding, not a failure: the job stays green so the
 # summary is what gets read, not the red X.

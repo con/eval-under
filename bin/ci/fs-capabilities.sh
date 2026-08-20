@@ -142,7 +142,7 @@ open(p, "w").close()
 os.setxattr(p, "user.eval_under", b"1")
 os.getxattr(p, "user.eval_under")
 ' "$work"; }
-c_chown() { [ "$(id -u)" = 0 ] || return 1; : > "$work/co" && chown 1:1 "$work/co"; }
+c_chown() { : > "$work/co" && chown 1:1 "$work/co"; }
 c_case_sensitive() {
     : > "$work/CaseA"; [ ! -e "$work/casea" ]
 }
@@ -165,7 +165,13 @@ check flock              c_flock
 check sqlite-wal         c_sqlite_wal
 check sqlite-delete-mode c_sqlite_delete_mode
 check xattr-user         c_xattr_user
-check chown              c_chown
+if [ "$(id -u)" = 0 ]; then
+    check chown c_chown
+else
+    # chown(2) is restricted to root regardless of the filesystem, so a
+    # "no" here would say nothing about the filesystem.
+    say chown "n/a-not-root"
+fi
 check case-sensitive     c_case_sensitive
 check long-name-255      c_long_name
 check special-chars      c_special_chars
