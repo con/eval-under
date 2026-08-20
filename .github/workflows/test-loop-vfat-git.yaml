@@ -1,11 +1,10 @@
-name: Loop vfat
+name: Loop vfat / git testsuite
 
-# Thin dispatcher so this flavour gets a distinct README badge.
-# Delegates all work to _test-under.yaml (reusable).
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
 #
-# `--fs vfat` is git-annex's canonical "crippled filesystem" flavour
-# (no fifos, no symlinks, case-insensitive) and triggers adjusted-
-# branch handling in git-annex init.
+# Thin dispatcher so this matrix cell (loop-vfat x git) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
 
 on:
   push:
@@ -14,19 +13,19 @@ on:
       - "bin/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-loop-vfat.yaml"
+      - ".github/workflows/test-loop-vfat-git.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-loop-vfat.yaml"
+      - ".github/workflows/test-loop-vfat-git.yaml"
   workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 1"  # Mon 05:17 UTC
+    - cron: "32 5 * * 1"  # Mon 05:32 UTC
 
 concurrency:
-  group: test-loop-vfat-${{ github.ref }}
+  group: loop-vfat-git-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,6 +34,7 @@ jobs:
     with:
       backend: "loop"
       backend-version: "vfat"
+      target: "git"
     permissions:
       contents: read
       actions: read

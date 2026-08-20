@@ -1,7 +1,10 @@
-name: BeeGFS 8.1.0
+name: BeeGFS 8.1.0 / stress-ng
 
-# Thin dispatcher so this flavour gets a distinct README badge.
-# Delegates all work to _test-under.yaml (reusable).
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
+#
+# Thin dispatcher so this matrix cell (beegfs-8.1.0 x stress-ng) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
 
 on:
   push:
@@ -11,20 +14,20 @@ on:
       - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-8.1.0.yaml"
+      - ".github/workflows/test-beegfs-8.1.0-stress-ng.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-8.1.0.yaml"
+      - ".github/workflows/test-beegfs-8.1.0-stress-ng.yaml"
   workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 1"  # Mon 05:17 UTC
+    - cron: "47 5 * * 1"  # Mon 05:47 UTC
 
 concurrency:
-  group: test-beegfs-8.1.0-${{ github.ref }}
+  group: beegfs-8.1.0-stress-ng-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +36,7 @@ jobs:
     with:
       backend: "beegfs"
       backend-version: "8.1.0"
+      target: "stress-ng"
     permissions:
       contents: read
       actions: read

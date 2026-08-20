@@ -1,14 +1,19 @@
-name: (reusable) git-annex test under <backend>
+name: (reusable) <target> under <backend>
 
 # Reusable body for the eval-under framework. Takes a backend
-# (beegfs / nfs / loop) plus a backend-version (a BeeGFS point release,
-# a loop filesystem name, or `n/a` for NFS), installs the matching
-# client-side packages, fetches the freshest con/git-annex daily, and
-# runs the full `git annex test` under the requested filesystem.
+# (beegfs / nfs / loop), a backend-version (a BeeGFS point release,
+# a loop filesystem name, or `n/a` for NFS), and a target (which test
+# suite to run under that filesystem): git-annex, git, stress-ng, or
+# pjdfstest.
 #
-# Invoked by per-flavour dispatcher workflows so each backend/version
+# Installs the backend's client-side packages, prepares the target
+# (apt package or pinned-tag source build), and runs the suite with
+# TMPDIR/HOME on the mounted filesystem.
+#
+# Invoked by per-cell dispatcher workflows so each backend x target
 # combination gets its own badge URL. (GitHub only exposes one badge
-# per workflow file, not per matrix cell.)
+# per workflow file, not per matrix cell.) Those dispatchers are
+# generated -- see bin/ci/gen-dispatchers.sh.
 #
 # All non-trivial shell logic lives in bin/ci/*.sh so it can be shellcheck'd
 # and exercised locally in the Vagrant VM. See .claude/CLAUDE.md.
@@ -26,6 +31,13 @@ on:
           For loop:   filesystem type (e.g. vfat, ext4).
           For nfs:    literal "n/a" (no version to pin).
         required: true
+        type: string
+      target:
+        description: >-
+          Test suite to run under the backend:
+          git-annex | git | stress-ng | pjdfstest.
+        required: false
+        default: "git-annex"
         type: string
 
 jobs:
@@ -45,7 +57,13 @@ jobs:
       - name: Install backend client dependencies
         run: bin/ci/install-backend.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
 
+      - name: Install target ${{ inputs.target }}
+        run: bin/ci/install-target.sh "${{ inputs.target }}"
+
+      # Only the git-annex target needs the daily build (and the token
+      # that fetching it requires).
       - name: Fetch latest git-annex daily build from con/git-annex
+        if: inputs.target == 'git-annex'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bin/ci/install-git-annex-daily.sh
@@ -55,18 +73,23 @@ jobs:
           git config --global user.email test@github.land
           git config --global user.name  "GitHub Almighty"
 
-      - name: Run git annex test under ${{ inputs.backend }}
-        run: sudo -E bin/ci/run-under.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
+      - name: Run ${{ inputs.target }} under ${{ inputs.backend }}
+        run: >-
+          sudo -E bin/ci/run-under.sh
+          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
 
       - name: Dump failure logs
         if: failure()
-        run: bin/ci/dump-failure-logs.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
+        run: >-
+          bin/ci/dump-failure-logs.sh
+          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: logs-${{ inputs.backend }}-${{ inputs.backend-version }}
+          name: logs-${{ inputs.backend }}-${{ inputs.backend-version }}-${{ inputs.target }}
           path: |
             /var/log/beegfs-*
+            /opt/eval-under-src/git/t/test-results/**
           if-no-files-found: ignore

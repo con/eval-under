@@ -1,0 +1,40 @@
+name: NFS (localhost) / stress-ng
+
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
+#
+# Thin dispatcher so this matrix cell (nfs x stress-ng) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "bin/**"
+      - "provision/**"
+      - ".github/workflows/_test-under.yaml"
+      - ".github/workflows/test-nfs-stress-ng.yaml"
+  pull_request:
+    paths:
+      - "bin/**"
+      - "provision/**"
+      - ".github/workflows/_test-under.yaml"
+      - ".github/workflows/test-nfs-stress-ng.yaml"
+  workflow_dispatch:
+  schedule:
+    - cron: "47 5 * * 1"  # Mon 05:47 UTC
+
+concurrency:
+  group: nfs-stress-ng-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: ./.github/workflows/_test-under.yaml
+    with:
+      backend: "nfs"
+      backend-version: "n/a"
+      target: "stress-ng"
+    permissions:
+      contents: read
+      actions: read

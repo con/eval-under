@@ -1,10 +1,10 @@
-name: NFS
+name: NFS (localhost) / git testsuite
 
-# Thin dispatcher so this flavour gets a distinct README badge.
-# Delegates all work to _test-under.yaml (reusable).
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
 #
-# NFS backend uses `nfs-kernel-server` for a localhost loopback export;
-# no version to pin (kernel + nfs-utils are ambient on the runner OS).
+# Thin dispatcher so this matrix cell (nfs x git) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
 
 on:
   push:
@@ -13,19 +13,19 @@ on:
       - "bin/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-nfs.yaml"
+      - ".github/workflows/test-nfs-git.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-nfs.yaml"
+      - ".github/workflows/test-nfs-git.yaml"
   workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 1"  # Mon 05:17 UTC
+    - cron: "32 5 * * 1"  # Mon 05:32 UTC
 
 concurrency:
-  group: test-nfs-${{ github.ref }}
+  group: nfs-git-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -34,6 +34,7 @@ jobs:
     with:
       backend: "nfs"
       backend-version: "n/a"
+      target: "git"
     permissions:
       contents: read
       actions: read

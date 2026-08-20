@@ -10,6 +10,9 @@
 #   - nfs-kernel-server                              (eval-under-nfs)
 #   - dosfstools + xfsprogs + btrfs-progs            (eval-under-loop, per fs)
 #   - git-annex + git (Ubuntu apt versions, enough to smoke-test the wrapper)
+#   - stress-ng + build deps for the git / pjdfstest targets
+#     (the source builds themselves stay opt-in: run
+#      `bin/ci/install-target.sh {git,pjdfstest}` inside the VM)
 #
 # Idempotent: safe to re-run via `vagrant provision`.
 
@@ -40,12 +43,25 @@ apt-get install -y --no-install-recommends \
   nfs-kernel-server \
   dosfstools xfsprogs btrfs-progs
 
+log "eval-under test-target dependencies"
+# stress-ng:                    bin/ci/target-stress-ng.sh (apt is the whole install).
+# autoconf/automake/libtool:    building pjdfstest from its pinned tag.
+# gettext + lib*-dev:           building git from its pinned tag.
+# The clones + builds are deliberately NOT done here (minutes of
+# provisioning for something not every VM needs) -- run
+# `bin/ci/install-target.sh git` / `... pjdfstest` in the VM on demand.
+apt-get install -y --no-install-recommends \
+  stress-ng \
+  autoconf automake libtool \
+  gettext zlib1g-dev libssl-dev libcurl4-openssl-dev libexpat1-dev
+
 log "Docker CE + compose plugin"
 if ! command -v docker >/dev/null; then
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
     -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
+  # shellcheck disable=SC1091  # /etc/os-release provided by the OS
   codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
     > /etc/apt/sources.list.d/docker.list
@@ -59,6 +75,7 @@ systemctl enable --now docker
 log "BeeGFS APT repo (v${BEEGFS_VERSION})"
 # Prefer a list file for the current Ubuntu codename; fall back to jammy
 # if the newer codename isn't yet published (BeeGFS DKMS still builds).
+# shellcheck disable=SC1091  # /etc/os-release provided by the OS
 codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
 list_url="https://www.beegfs.io/release/beegfs_${BEEGFS_VERSION}/dists/beegfs-${codename}.list"
 if ! curl -fsI "$list_url" >/dev/null 2>&1; then
@@ -101,6 +118,7 @@ log "Provisioning complete"
 echo "  git-annex : $(git-annex version | head -1)"
 echo "  docker    : $(docker --version)"
 echo "  beegfs mod: $(modinfo -F version beegfs 2>/dev/null || echo '?')"
+echo "  stress-ng : $(stress-ng --version 2>/dev/null | head -1 || echo missing)"
 echo "  mkfs.vfat : $(command -v mkfs.vfat || echo missing)"
 echo "  mkfs.xfs  : $(command -v mkfs.xfs  || echo missing)"
 echo "  exportfs  : $(command -v exportfs  || echo missing)"

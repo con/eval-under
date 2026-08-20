@@ -1,7 +1,10 @@
-name: BeeGFS 7.4.6
+name: BeeGFS 7.4.6 / pjdfstest
 
-# Thin dispatcher so this flavour gets a distinct README badge.
-# Delegates all work to _test-under.yaml (reusable).
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
+#
+# Thin dispatcher so this matrix cell (beegfs-7.4.6 x pjdfstest) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
 
 on:
   push:
@@ -11,20 +14,20 @@ on:
       - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-7.4.6.yaml"
+      - ".github/workflows/test-beegfs-7.4.6-pjdfstest.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "fixtures/beegfs/**"
       - "provision/**"
       - ".github/workflows/_test-under.yaml"
-      - ".github/workflows/test-beegfs-7.4.6.yaml"
+      - ".github/workflows/test-beegfs-7.4.6-pjdfstest.yaml"
   workflow_dispatch:
   schedule:
-    - cron: "17 5 * * 1"  # Mon 05:17 UTC
+    - cron: "2 5 * * 1"  # Mon 05:02 UTC
 
 concurrency:
-  group: test-beegfs-7.4.6-${{ github.ref }}
+  group: beegfs-7.4.6-pjdfstest-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +36,7 @@ jobs:
     with:
       backend: "beegfs"
       backend-version: "7.4.6"
+      target: "pjdfstest"
     permissions:
       contents: read
       actions: read

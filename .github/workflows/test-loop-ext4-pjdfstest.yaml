@@ -1,0 +1,40 @@
+name: Loop ext4 / pjdfstest
+
+# GENERATED FILE -- edit bin/ci/matrix.sh and re-run
+# bin/ci/gen-dispatchers.sh instead of editing this by hand.
+#
+# Thin dispatcher so this matrix cell (loop-ext4 x pjdfstest) gets a distinct
+# README badge. All work is delegated to _test-under.yaml (reusable).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "bin/**"
+      - "provision/**"
+      - ".github/workflows/_test-under.yaml"
+      - ".github/workflows/test-loop-ext4-pjdfstest.yaml"
+  pull_request:
+    paths:
+      - "bin/**"
+      - "provision/**"
+      - ".github/workflows/_test-under.yaml"
+      - ".github/workflows/test-loop-ext4-pjdfstest.yaml"
+  workflow_dispatch:
+  schedule:
+    - cron: "2 5 * * 1"  # Mon 05:02 UTC
+
+concurrency:
+  group: loop-ext4-pjdfstest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: ./.github/workflows/_test-under.yaml
+    with:
+      backend: "loop"
+      backend-version: "ext4"
+      target: "pjdfstest"
+    permissions:
+      contents: read
+      actions: read

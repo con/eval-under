@@ -9,15 +9,20 @@
 # without masking the underlying failure.
 #
 # usage:
-#   bin/ci/dump-failure-logs.sh <backend> <version>
+#   bin/ci/dump-failure-logs.sh <backend> <version> [target]
 #
-# beegfs: `docker compose logs` + dmesg-filtered-for-beegfs
-# nfs/loop: full dmesg tail
+# backend side:
+#   beegfs:   `docker compose logs` + dmesg-filtered-for-beegfs
+#   nfs/loop: full dmesg tail
+# target side:
+#   git:      the failing tests' own output from t/test-results/
 
 set -uo pipefail
 
 BACKEND="${1:?backend required}"
 VERSION="${2:-}"
+TARGET="${3:-}"
+SRC_DIR="${EVAL_UNDER_SRC_DIR:-/opt/eval-under-src}"
 
 case "$BACKEND" in
     beegfs)
@@ -40,5 +45,23 @@ case "$BACKEND" in
         echo "unknown backend: $BACKEND" >&2
         ;;
 esac
+
+# git's testsuite keeps a per-script .out next to a .counts summary; the
+# aggregated `make` output only says which scripts failed, not why.
+if [ "$TARGET" = "git" ]; then
+    results="$SRC_DIR/git/t/test-results"
+    echo "=== git testsuite failures ($results) ==="
+    if [ -d "$results" ]; then
+        for counts in "$results"/*.counts; do
+            [ -e "$counts" ] || continue
+            grep -q '^failed 0$' "$counts" && continue
+            echo "--- $(basename "${counts%.counts}") ---"
+            cat "$counts" || true
+            tail -100 "${counts%.counts}.out" 2>/dev/null || true
+        done
+    else
+        echo "no test-results directory (the suite never started?)"
+    fi
+fi
 
 exit 0
