@@ -79,11 +79,30 @@ install_loop() {
         xfs)                pkg=xfsprogs ;;
         btrfs)              pkg=btrfs-progs ;;
         ext2|ext3|ext4)     pkg=e2fsprogs ;;  # usually preinstalled
+        gfs2)               pkg=gfs2-utils ;;
+        ocfs2)              pkg=ocfs2-tools ;;
+        f2fs)               pkg=f2fs-tools ;;
+        exfat)              pkg=exfatprogs ;;
+        nilfs2)             pkg=nilfs-tools ;;
+        bcachefs)           pkg=bcachefs-tools ;;
         *) echo "unknown loop filesystem: $VERSION" >&2; exit 1 ;;
     esac
     apt_update
     apt_install "$pkg"
     command -v "mkfs.$VERSION"
+
+    # gfs2 and ocfs2 ship in linux-modules-extra rather than the base
+    # kernel package. It is present on GitHub-hosted runners, but say so
+    # out loud here rather than discovering it as an "unknown filesystem
+    # type" at mount time.
+    case "$VERSION" in
+        gfs2|ocfs2)
+            if ! sudo modprobe "$VERSION"; then
+                apt_install "linux-modules-extra-$(uname -r)"
+                sudo modprobe "$VERSION"
+            fi
+            ;;
+    esac
 }
 
 case "$BACKEND" in

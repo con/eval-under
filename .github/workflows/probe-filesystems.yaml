@@ -75,4 +75,79 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Probe ${{ matrix.candidate }}
-        run: bin/ci/probe-backend.sh "${{ matrix.candidate }}"
+        run: |
+          set -o pipefail
+          bin/ci/probe-backend.sh "${{ matrix.candidate }}" \
+            2>&1 | tee "$RUNNER_TEMP/probe.log"
+
+      # Runs even when the probe failed: "could not be brought up, here
+      # is why" is the finding, and it belongs in the roll-up too.
+      - name: Extract the summary line
+        if: always()
+        run: |
+          grep '^SUMMARY|' "$RUNNER_TEMP/probe.log" > "$RUNNER_TEMP/summary.txt" \
+            || echo "SUMMARY|${{ matrix.candidate }}|NO OUTPUT|-|probe produced no summary line|" \
+               > "$RUNNER_TEMP/summary.txt"
+          sed -i "s/^SUMMARY|/SUMMARY|${{ matrix.os }}|/" "$RUNNER_TEMP/summary.txt"
+          cat "$RUNNER_TEMP/summary.txt"
+
+      - name: Upload the summary line
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-${{ matrix.os }}-${{ matrix.candidate }}
+          path: ${{ runner.temp }}/summary.txt
+          retention-days: 30
+
+  # The probe answers "can this filesystem exist here?". This answers the
+  # follow-up: does the *backend* -- the thing a matrix row would call --
+  # actually drive it end to end? ext4 is the control.
+  backend-smoke:
+    name: eval-under loop --fs ${{ matrix.fs }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        fs: [ext4, gfs2, ocfs2]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install backend deps
+        run: bin/ci/install-backend.sh loop "${{ matrix.fs }}"
+
+      - name: Run the capability probe through the backend
+        run: |
+          sudo bin/eval-under loop --fs "${{ matrix.fs }}" --set-home -- \
+            bin/ci/fs-capabilities.sh
+
+  # One place to read the whole run. Without this, answering "which
+  # candidates came up?" means opening 24 job logs.
+  roll-up:
+    name: Roll-up
+    runs-on: ubuntu-24.04
+    needs: [probe, backend-smoke]
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: summary-*
+          path: summaries
+          merge-multiple: false
+
+      - name: Render the table
+        run: |
+          {
+            echo "| runner | candidate | verdict | time | note |"
+            echo "| --- | --- | --- | --- | --- |"
+            cat summaries/*/summary.txt \
+              | sort -t'|' -k3,3 -k2,2 \
+              | awk -F'|' '{printf "| %s | `%s` | **%s** | %s | %s |\n", $2, $3, $4, $5, $6}'
+            echo
+            echo "### Capability profiles"
+            echo
+            echo '```'
+            cat summaries/*/summary.txt | sort
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
