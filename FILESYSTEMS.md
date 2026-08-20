@@ -97,7 +97,7 @@ Run 5 of the probe workflow, ubuntu-24.04 unless noted, kernel
 | `cifs` | **BOOTSTRAPPED** | 26s | **`sqlite-wal=no`, `sqlite-delete-mode=no`**, `symlink=no`, `fifo=no`, `exec-bit=no`, `perm-bits=no`, `case-sensitive=no` |
 | `exfat` | **BOOTSTRAPPED** | 25s | Crippled as expected: no symlinks, hardlinks, fifos, exec bit, xattrs; case-insensitive; **rejects `:*?` in names** |
 | `s3-rclone` | **BOOTSTRAPPED** | 46s | Crippled in the same shape as exfat -- but SQLite works |
-| `sshfs` | **BOOTSTRAPPED** | 10s | No fifos, no unix sockets, no xattrs, and **1-second timestamp granularity** (1 distinct mtime across 5 rapid creates, vs 5 everywhere else) |
+| `sshfs` | **BOOTSTRAPPED** | 10s | **`hardlink-same-inode=no`** (link() succeeds, the link is invisible), no fifos, no unix sockets, no xattrs, and **1-second timestamp granularity** (1 distinct mtime across 5 rapid creates, vs 5 everywhere else) |
 | `glusterfs` | **BOOTSTRAPPED** | 18s | Full POSIX profile through the FUSE client, SQLite WAL included |
 | `zfs` | **BOOTSTRAPPED** | 13s | Full POSIX profile |
 | `f2fs` | **BOOTSTRAPPED** | 39s | Full POSIX profile |
@@ -126,6 +126,14 @@ what the rows would be *for*:
   resolves them into one. That is the shape of bug that makes git's
   racy-timestamp handling matter, and no filesystem currently in the
   matrix exhibits it.
+- **sshfs creates hardlinks that cannot be seen as hardlinks.** `ln`
+  succeeds; both names then report distinct inodes and `nlink=1`,
+  because SFTP has no way to say otherwise. This one was found the
+  expensive way -- `hardlink=yes` called sshfs healthy, and it took a
+  real `git annex test` run to discover that `add` on an adjusted
+  unlocked branch fails on it. The probe now measures
+  `hardlink-same-inode` and `hardlink-nlink` directly, which turns a
+  20-minute suite run into a 10-second answer. See GOTCHAS.md.
 - **`ntfs3` is not vfat.** The in-kernel NTFS driver reports symlinks,
   mode bits and xattrs, so it would *not* be a second crippled-filesystem
   row -- it would be a row testing a driver users reach through WSL and
@@ -239,10 +247,11 @@ on a stock runner in under a minute.
 
 **Tier 2 -- each adds an axis the matrix does not have yet.**
 
-- **`sshfs`**, for the timestamp granularity alone: one distinct mtime
-  where every other filesystem here gives five. Nothing in the current
-  matrix tests what a coarse clock does to git's racy-timestamp
-  handling.
+- **`sshfs`**, now the strongest candidate on this list: it is the only
+  one measured that breaks a documented git-annex operation outright
+  (`add` on an adjusted unlocked branch, via invisible hardlinks), *and*
+  it is the only one with a one-second clock. Backend implemented --
+  `bin/eval-under-sshfs`.
 - **`loop --fs exfat`**, the crippled row that is *not* vfat: it also
   rejects `:`, `*` and `?` in filenames, which vfat-with-defaults does
   not surface, and it is what is on every USB drive.
