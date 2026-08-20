@@ -16,6 +16,8 @@
 #   fcntl-lock=no       -> git-annex falls back to annex.pidlock (NFS)
 #   link-eexist=no      -> pidlock is unsafe: two files, one name (Lustre)
 #   symlink=no          -> crippled filesystem, adjusted branch (vfat)
+#   hardlink-same-inode=no -> "failed to link to annex" (sshfs): link()
+#                          works but the link is not observable as one
 #   exec-bit=no         -> vfat/ntfs: every file looks executable
 #
 # usage:
@@ -57,6 +59,24 @@ say fstype "$(stat -f -c %T "$DIR" 2>/dev/null || echo unknown)"
 
 c_symlink() { ln -s target "$work/sl" && [ -L "$work/sl" ]; }
 c_hardlink() { : > "$work/hl-a" && ln "$work/hl-a" "$work/hl-b"; }
+
+# `ln` succeeding is not the same as the link being observable. sshfs
+# creates the link over SFTP but reports a distinct inode and nlink=1 for
+# each name -- so the two names are indistinguishable from two copies.
+# git-annex's add (adjusted unlocked branch) hardlinks the file into
+# .git/annex/objects and then verifies it, and git's own local clone does
+# the same check, so both fail on such a filesystem while `ln` looks fine.
+# These two checks are what predict that, and c_hardlink alone does not.
+c_hardlink_same_inode() {
+    : > "$work/hli-a" && ln "$work/hli-a" "$work/hli-b" || return 1
+    local ia ib
+    ia="$(stat -c %i "$work/hli-a")" && ib="$(stat -c %i "$work/hli-b")" || return 1
+    [ "$ia" = "$ib" ]
+}
+c_hardlink_nlink() {
+    : > "$work/hln-a" && ln "$work/hln-a" "$work/hln-b" || return 1
+    [ "$(stat -c %h "$work/hln-a")" = 2 ]
+}
 c_fifo() { mkfifo "$work/fifo"; }
 c_unix_socket() { python3 -c '
 import socket, sys, os
@@ -153,6 +173,8 @@ c_trailing_space() { : > "$work/trailing "; }
 
 check symlink            c_symlink
 check hardlink           c_hardlink
+check hardlink-same-inode c_hardlink_same_inode
+check hardlink-nlink     c_hardlink_nlink
 check fifo               c_fifo
 check unix-socket        c_unix_socket
 check exec-bit           c_exec_bit

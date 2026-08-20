@@ -27,8 +27,10 @@ MNT="${EVAL_UNDER_MOUNT:-/mnt/sshfs}"
 KEEP="${EVAL_UNDER_KEEP:-0}"
 SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 
-# Loopback-mode knobs.
-PORT="${EVAL_UNDER_SSHFS_PORT:-2222}"
+# Loopback-mode knobs. An empty PORT means "pick a free one": two
+# eval-under runs on the same machine (or two CI cells on one runner)
+# must not fight over a fixed port.
+PORT="${EVAL_UNDER_SSHFS_PORT:-}"
 # Remote mode: unset means loopback.
 HOST="${EVAL_UNDER_SSHFS_HOST:-}"
 REMOTE_USER="${EVAL_UNDER_SSHFS_USER:-}"
@@ -68,8 +70,10 @@ Options (flag / env var / default / purpose):
       Skip teardown; leave the mount (and the throwaway sshd) up for
       debugging.
 
-  --port N             EVAL_UNDER_SSHFS_PORT         2222
-      Port for the throwaway sshd (loopback mode only).
+  --port N             EVAL_UNDER_SSHFS_PORT         (first free >=2222)
+      Port for the throwaway sshd (loopback mode only). Left unset, the
+      first free port at or above 2222 is used, so concurrent runs do
+      not collide.
 
   --host HOST          EVAL_UNDER_SSHFS_HOST         (unset)
       Mount from a remote host instead of starting a local sshd. Uses
@@ -213,6 +217,24 @@ teardown() {
 }
 trap teardown EXIT
 
+# First free TCP port at or above $1 on loopback. `ss` if we have it,
+# otherwise a bash /dev/tcp connect probe: a refused connection means
+# nothing is listening.
+find_free_port() {
+  local p="$1" limit=$(( $1 + 200 ))
+  while [ "$p" -lt "$limit" ]; do
+    if command -v ss >/dev/null 2>&1; then
+      ss -ltnH "sport = :$p" 2>/dev/null | grep -q . || { echo "$p"; return 0; }
+    else
+      if ! (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; then
+        echo "$p"; return 0
+      fi
+    fi
+    p=$(( p + 1 ))
+  done
+  return 1
+}
+
 find_sftp_server() {
   local p
   for p in /usr/lib/openssh/sftp-server \
@@ -239,6 +261,11 @@ start_local_sshd() {
     echo "ERROR: no sftp-server binary found (openssh-sftp-server?)" >&2
     exit 3
   }
+
+  if [ -z "$PORT" ]; then
+    PORT="$(find_free_port 2222)" || {
+      echo "ERROR: no free port in 2222-2422" >&2; exit 3; }
+  fi
 
   as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/id" -C eval-under-sshfs
   as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/hostkey" -C eval-under-sshfs-host
@@ -315,7 +342,9 @@ mount_sshfs() {
   "${SUDO[@]}" mkdir -p "$MNT"
   "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
 
-  log "sshfs -p $PORT -o $opts $spec $MNT"
+  # Remote mode never called start_local_sshd, so PORT may still be
+  # empty: that is plain ssh, which means 22.
+  log "sshfs -p ${PORT:=22} -o $opts $spec $MNT"
   as_invoker sshfs -p "$PORT" -o "$opts" "$spec" "$MNT"
 
   # An sshfs mount can appear in the mount table before the first
