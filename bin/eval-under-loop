@@ -26,8 +26,6 @@ SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 # new name is unset.
 FS="${EVAL_UNDER_LOOP_FS:-${DATALAD_TESTS_TEMP_FS:-vfat}}"
 SIZE_MB="${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-100}}"
-SIZE_EXPLICIT=0
-[ -n "${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-}}" ] && SIZE_EXPLICIT=1
 MKFS_OPTS="${EVAL_UNDER_LOOP_MKFS_OPTS-}"
 MKFS_OPTS_EXPLICIT=0
 [ -n "${EVAL_UNDER_LOOP_MKFS_OPTS+x}" ] && MKFS_OPTS_EXPLICIT=1
@@ -72,9 +70,9 @@ Options (flag / env var / default / purpose):
   --size MB            EVAL_UNDER_LOOP_SIZE_MB        100
       Backing image size in megabytes. Bumped from datalad's original
       10 -- git-annex's testsuite fills that in a few seconds. Raised
-      automatically to a filesystem's own minimum (gfs2 and ocfs2
-      reserve journal space and cannot live in 100MB); pass a larger
-      --size explicitly and it is honoured as-is.
+      to the filesystem's own minimum when it is larger: gfs2 and
+      ocfs2 reserve journal space and cannot live in 100MB. The bump
+      is logged, never silent.
 
   --mkfs-opts "..."    EVAL_UNDER_LOOP_MKFS_OPTS      per-fs default
       Override the mkfs argument list. The defaults exist to make
@@ -107,7 +105,7 @@ while [ $# -gt 0 ]; do
     --mount-point) MNT="$2"; shift 2 ;;
     --set-home) SET_HOME=1; shift ;;
     --fs) FS="$2"; shift 2 ;;
-    --size) SIZE_MB="$2"; SIZE_EXPLICIT=1; shift 2 ;;
+    --size) SIZE_MB="$2"; shift 2 ;;
     --mkfs-opts) MKFS_OPTS="$2"; MKFS_OPTS_EXPLICIT=1; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -191,13 +189,13 @@ IMAGE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-loop-XXXXX").img"
 LOOP=""
 
 start_loop() {
+  # Raise, never refuse. Callers pass a size chosen for the *target*
+  # (bin/ci/run-under.sh always passes one), and no caller knows every
+  # filesystem's journal overhead. A harness that cannot make a 100MB
+  # gfs2 should make the smallest gfs2 that works and say so, not stop.
   local floor
   floor="$(min_size_mb "$FS")"
   if [ "$SIZE_MB" -lt "$floor" ]; then
-    if [ "$SIZE_EXPLICIT" = 1 ]; then
-      echo "ERROR: --size $SIZE_MB is below the ${floor}MB minimum for $FS" >&2
-      exit 3
-    fi
     log "raising image size ${SIZE_MB}MB -> ${floor}MB ($FS minimum)"
     SIZE_MB="$floor"
   fi
