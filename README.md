@@ -14,6 +14,11 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 `bin/eval-under-<name>` scripts, new suites as `bin/ci/target-<name>.sh`
 (see below).
 
+> **Which filesystem should be next?** [FILESYSTEMS.md](FILESYSTEMS.md)
+> surveys the filesystems with documented git-annex / DataLad breakage
+> against what can actually be stood up in CI -- the second half
+> measured, not guessed, by the *Probe candidate filesystems* workflow.
+>
 > **Read [GOTCHAS.md](GOTCHAS.md) before drawing conclusions from a red
 > cell.** It records the exact mkfs / mount / export settings each
 > backend uses -- results only mean something relative to those -- and
@@ -157,6 +162,10 @@ the full flag / env-var / default table per backend.
 | `bin/ci/gen-dispatchers.sh`              | Regenerates the per-cell workflows + the README matrix from `matrix.sh`       |
 | `.github/workflows/_test-under.yaml`     | Reusable workflow parameterised on `backend` + `backend-version` + `target`   |
 | `.github/workflows/test-*.yaml`          | Generated per-cell dispatchers (one badge each)                               |
+| `FILESYSTEMS.md`                         | Survey: reported git-annex / DataLad breakage per filesystem vs. what can be bootstrapped |
+| `bin/ci/probe-backend.sh`                | Reconnaissance: try to stand up a candidate filesystem here, report what it got |
+| `bin/ci/fs-capabilities.sh`              | What a mounted filesystem supports, in the dimensions git-annex trips over    |
+| `.github/workflows/probe-filesystems.yaml` | Runs the probes; roll-up job renders the whole table                        |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `datalad/git-annex` (external PR target)             |
 
 ## Local iteration (VM)
