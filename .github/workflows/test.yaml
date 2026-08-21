@@ -117,15 +117,16 @@ jobs:
           name: result-${{ matrix.slug }}
           path: result/conclusion
 
-  badges:
+  publish:
     needs: test
     # always(): the point is to publish the red cells too.
-    # Not on pull_request: a PR must not rewrite the badges the README
-    # shows for master.
+    # Not on pull_request: a PR must not rewrite the status the README
+    # and the report page show for master.
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read  # to resolve each cell's job URL for the report
     steps:
       - uses: actions/checkout@v4
 
@@ -134,7 +135,7 @@ jobs:
           pattern: result-*
           path: results
 
-      - name: Render and publish badges
+      - name: Merge results and publish the status site
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bin/ci/publish-badges.sh results
+        run: bin/ci/publish-status.sh
