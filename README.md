@@ -159,28 +159,28 @@ the full flag / env-var / default table per backend.
 
 ## File layout
 
-| Path                                     | Purpose                                                                       |
-| ---------------------------------------- | ----------------------------------------------------------------------------- |
-| `Vagrantfile` + `provision/`             | Ubuntu 24.04 libvirt VM with docker + BeeGFS + NFS + loop deps + git-annex    |
-| `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                              |
-| `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                  |
-| `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                       |
-| `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                        |
-| `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`         |
-| `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)    |
-| `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                      |
+| Path                                     | Purpose                                                                            |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| `Vagrantfile` + `provision/`             | Ubuntu 24.04 libvirt VM with docker + BeeGFS + NFS + loop deps + git-annex         |
+| `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                                   |
+| `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
+| `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
+| `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
+| `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
+| `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
+| `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |
 | `.github/matrix.yaml`                    | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
 | `bin/ci/matrix.sh`                       | Shell accessors over `.github/matrix.yaml`, sourced by every other `bin/ci` script |
-| `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)          |
-| `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)  |
-| `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`               |
-| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                  |
-| `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                             |
-| `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`            |
-| `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                   |
-| `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                        |
-| `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job       |
-| `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `datalad/git-annex` (external PR target)             |
+| `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
+| `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
+| `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
+| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                       |
+| `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
+| `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
+| `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
+| `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
+| `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
+| `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)
 
@@ -255,7 +255,7 @@ filesystem testing.
 
 - `bin/eval-under-beegfs` + `fixtures/beegfs/*` + a copy of
   `drafts/git-annex-test-beegfs.yaml` -> PR to
-  [datalad/git-annex](https://github.com/datalad/git-annex) once
+  [con/git-annex](https://github.com/con/git-annex) once
   validated, either as a new workflow or as a matrix flavour of
   `test-annex` in `build-ubuntu.yaml`.
 - Optionally, a slimmed-down smoke workflow -> PR to
