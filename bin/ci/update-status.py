@@ -114,8 +114,8 @@ def env_int(name: str, default: int) -> int:
     """int() of an env var, tolerating unset *and* set-but-empty.
 
     A workflow that passes `FOO: ${{ github.event.x }}` for a missing
-    value exports the empty string, not nothing -- os.environ.get's
-    default never fires and int("") raises.
+    value exports the empty string, not nothing -- so the default
+    argument of os.environ.get never fires and int("") raises.
     """
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
