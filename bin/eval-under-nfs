@@ -23,6 +23,10 @@ SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 # back if the new name is unset.
 SYNC="${EVAL_UNDER_NFS_SYNC:-${DATALAD_TESTS_NFS_SYNC:-}}"
 
+# Export with no_root_squash AND keep the wrapped command running as root,
+# instead of the default (root_squash + drop back to the invoking user).
+NO_ROOT_SQUASH="${EVAL_UNDER_NFS_NO_ROOT_SQUASH:-0}"
+
 usage() {
   cat <<'EOF'
 Usage: eval-under-nfs [OPTIONS] -- CMD [ARGS...]
@@ -53,6 +57,20 @@ Options (flag / env var / default / purpose):
       during clone/save/get, and `sync` pushed datalad CI jobs past 6h.
       Enable to reproduce that slowdown locally.
 
+  --no-root-squash     EVAL_UNDER_NFS_NO_ROOT_SQUASH  (unset)
+      Export with `no_root_squash` and run the wrapped command as root
+      rather than dropping back to the invoking user.
+
+      The default is the opposite on purpose: `root_squash` plus an
+      unprivileged wrapped command is what a normal user's NFS home
+      looks like, and reproducing it is half the point of this backend.
+      But a suite that tests privileged behaviour (pjdfstest's
+      chown/mknod/sticky-bit assertions, stress-ng's chown/mknod
+      stressors) has nothing to measure when every privileged syscall is
+      squashed to nobody -- for those, this flag is what makes the run
+      meaningful. Also matches how HPC sites actually export to trusted
+      compute nodes.
+
   -h, --help
       Print this help.
 
@@ -78,6 +96,7 @@ while [ $# -gt 0 ]; do
     --mount-point) MNT="$2"; shift 2 ;;
     --set-home) SET_HOME=1; shift ;;
     --sync) SYNC=1; shift ;;
+    --no-root-squash) NO_ROOT_SQUASH=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
@@ -90,6 +109,14 @@ if [ -n "${SYNC:-}" ] && [ "$SYNC" != 0 ]; then
   NFS_OPTS="rw,sync"
 else
   NFS_OPTS="rw,async"
+fi
+
+# Export options and mount options are different namespaces: `sync`/`async`
+# are valid in both, but `no_root_squash` is export-only and mount(8) would
+# reject it. Keep them separate.
+EXPORT_OPTS="$NFS_OPTS"
+if [ "$NO_ROOT_SQUASH" != 0 ]; then
+  EXPORT_OPTS="$EXPORT_OPTS,no_root_squash"
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -131,8 +158,8 @@ start_export() {
   # under root_squash a later chown as root would be denied.
   "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$ORIG"
 
-  log "exportfs -o $NFS_OPTS localhost:$ORIG"
-  "${SUDO[@]}" exportfs -o "$NFS_OPTS" "localhost:$ORIG"
+  log "exportfs -o $EXPORT_OPTS localhost:$ORIG"
+  "${SUDO[@]}" exportfs -o "$EXPORT_OPTS" "localhost:$ORIG"
 }
 
 mount_nfs() {
@@ -168,7 +195,8 @@ if [ "$SET_HOME" = 1 ]; then
   # lands as nobody:nogroup and the wrapped command can't cd into it.
   # (We could be running as effective-root either via `sudo <script>` or
   # directly as root; use INVOKER_UID rather than SUDO array length.)
-  if [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+  if [ "$NO_ROOT_SQUASH" = 0 ] \
+     && [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
     sudo -u "$INVOKER_USER" mkdir -p "$RUN_HOME"
   else
     mkdir -p "$RUN_HOME"
@@ -184,7 +212,11 @@ fi
 # script was invoked as `sudo eval-under-nfs`, the wrapped command runs
 # as the pre-sudo user; if invoked as root directly, it runs as root
 # (and the caller had better have used --no-root-squash exports).
-if [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+# --no-root-squash short-circuits the drop: the export permits root and the
+# wrapped command keeps its privileges, which is what the root-requiring
+# suites need.
+if [ "$NO_ROOT_SQUASH" = 0 ] \
+   && [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
   log "running (as uid=$INVOKER_UID): $*"
   sudo -u "$INVOKER_USER" -E \
     env HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" \

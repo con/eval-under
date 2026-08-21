@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Single source of truth for the eval-under CI matrix.
+#
+# The matrix is backends x targets. A "backend" answers "which
+# filesystem?" (bin/eval-under-<backend>); a "target" answers "which test
+# suite do we run under it?" (bin/ci/target-<target>.sh). Every
+# combination below becomes one cell of .github/workflows/test.yaml's
+# job matrix.
+#
+# Kept external, and read rather than templated, so that:
+#   - the workflow YAML stays thin (see .claude/CLAUDE.md);
+#   - `bin/ci/matrix.sh` and the workflow agree by construction instead
+#     of by discipline -- both read this file;
+#   - adding a filesystem or a suite is a data edit, not a code edit.
+#
+# Consumed by:
+#   bin/ci/matrix.sh        sourced by every other bin/ci script
+#   bin/ci/matrix-json.sh   renders the GitHub `matrix:` value
+#
+# After editing, run `bin/ci/gen-readme-matrix.sh` to refresh the
+# README's badge grid.
+
+repo-slug: con/eval-under
+
+# Where install-target.sh unpacks/builds source trees on the *runner*
+# (deliberately not on the filesystem under test -- we want the build to
+# be fast and the suite's I/O to be the only thing hitting the mount).
+src-dir: /opt/eval-under-src
+
+# Pinned upstream refs. Bump deliberately, never "latest": a moving
+# testsuite makes a red cell ambiguous (did the filesystem regress, or
+# did upstream add a test?).
+refs:
+  git: v2.55.0
+  # pjd/pjdfstest carries exactly one tag upstream, "0.1" (2016), and it
+  # no longer builds: major()/minor()/makedev() moved to
+  # <sys/sysmacros.h> in glibc 2.28 and the tree compiles with -Werror,
+  # so the implicit declarations are hard errors on anything modern.
+  # Master builds clean, so pin a commit on master instead -- same
+  # determinism, minus the patch we would otherwise have to carry.
+  pjdfstest: 85a8aea9e685999ef0540392fd80535f873d7ff7
+
+# Column order of the README CI matrix.
+#
+#   timeout        wall-clock budget for the wrapped suite, in seconds.
+#                  Kept below the job-level timeout so a runaway suite
+#                  produces a `timeout` exit code (and our logs) rather
+#                  than a bare GitHub cancellation.
+#   loop-size-mb   backing-image size for `eval-under loop --size`.
+#   needs-root     the suite is meaningless without privilege, so the
+#                  NFS backend must export no_root_squash for it.
+#                  pjdfstest is half privileged-vs-unprivileged
+#                  assertions and refuses to run otherwise; stress-ng's
+#                  chown/mknod stressors need CAP_CHOWN / CAP_MKNOD.
+targets:
+  - name: git-annex
+    label: git-annex test
+    timeout: 2400
+    loop-size-mb: 100
+    needs-root: false
+    needs-git-annex: true
+
+  # 174 scripts, ~2 min on ext4; a sync-heavy backend is far slower.
+  - name: git
+    label: git testsuite
+    timeout: 2400
+    loop-size-mb: 512
+    needs-root: false
+    needs-git-annex: false
+
+  - name: stress-ng
+    label: stress-ng
+    timeout: 900
+    # copy-file's minimum --copy-file-bytes is 128M, and it needs source
+    # + destination, so 512 leaves uncomfortably little slack.
+    loop-size-mb: 768
+    needs-root: true
+    needs-git-annex: false
+
+  # ~8500 assertions, run serially; ext4 does it in minutes but a
+  # sync-heavy NFS or BeeGFS mount is an order of magnitude slower.
+  - name: pjdfstest
+    label: pjdfstest
+    timeout: 2400
+    loop-size-mb: 256
+    needs-root: true
+    needs-git-annex: false
+
+# Row order of the README CI matrix. `version` is the literal "n/a" for
+# backends with nothing to pin (see bin/ci/install-backend.sh).
+backends:
+  - backend: beegfs
+    version: 7.4.6
+    label: BeeGFS 7.4.6
+  - backend: beegfs
+    version: 8.1.0
+    label: BeeGFS 8.1.0
+  - backend: nfs
+    version: n/a
+    label: NFS (localhost)
+  - backend: loop
+    version: vfat
+    label: Loop vfat
+  - backend: loop
+    version: ext4
+    label: Loop ext4
