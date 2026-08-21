@@ -84,7 +84,7 @@ the full flag / env-var / default table per backend.
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                      |
 | `.github/workflows/_test-under.yaml`     | Reusable workflow parameterised on `backend` + `backend-version`              |
 | `.github/workflows/test-*.yaml`          | Per-flavour dispatchers (one badge each)                                      |
-| `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `datalad/git-annex` (external PR target)             |
+| `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)             |
 
 ## Local iteration (VM)
 
@@ -135,7 +135,7 @@ filesystem testing.
 
 - `bin/eval-under-beegfs` + `fixtures/beegfs/*` + a copy of
   `drafts/git-annex-test-beegfs.yaml` -> PR to
-  [datalad/git-annex](https://github.com/datalad/git-annex) once
+  [con/git-annex](https://github.com/con/git-annex) once
   validated, either as a new workflow or as a matrix flavour of
   `test-annex` in `build-ubuntu.yaml`.
 - Optionally, a slimmed-down smoke workflow -> PR to
