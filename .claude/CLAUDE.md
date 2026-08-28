@@ -58,3 +58,16 @@ A 1- or 2-line `run:` block (e.g. `git config --global user.email ...`;
 a `sudo dmesg | tail`) may stay inline. The bar is "would this benefit
 from `shellcheck` + local testability" -- if the answer is clearly no,
 inline is fine.
+
+## DESIGN.md and IMPLEMENTATION.md must stay in sync
+
+`DESIGN.md` (what and why) and `IMPLEMENTATION.md` (how, plus the
+measurements and constraints already established) describe one feature
+from two altitudes. They are a pair:
+
+- A change to an interface, a constraint, or the rollout order in one
+  **must** be reflected in the other in the same commit.
+- If they disagree, `DESIGN.md` wins and `IMPLEMENTATION.md` is the bug.
+- Facts recorded in `IMPLEMENTATION.md` carry their provenance --
+  `[verified: how]` or `[unverified]`. Do not promote an unverified
+  claim without actually verifying it, and do not silently drop one.
