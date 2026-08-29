@@ -30,10 +30,12 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 | NFS (localhost) | [![NFS (localhost) / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-git-annex.svg)](https://con.github.io/eval-under/#nfs-git-annex) | [![NFS (localhost) / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-git.svg)](https://con.github.io/eval-under/#nfs-git) | [![NFS (localhost) / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-stress-ng.svg)](https://con.github.io/eval-under/#nfs-stress-ng) | [![NFS (localhost) / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-pjdfstest.svg)](https://con.github.io/eval-under/#nfs-pjdfstest) |
 | Loop vfat | [![Loop vfat / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-git-annex.svg)](https://con.github.io/eval-under/#loop-vfat-git-annex) | [![Loop vfat / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-git.svg)](https://con.github.io/eval-under/#loop-vfat-git) | [![Loop vfat / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-stress-ng.svg)](https://con.github.io/eval-under/#loop-vfat-stress-ng) | [![Loop vfat / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-pjdfstest.svg)](https://con.github.io/eval-under/#loop-vfat-pjdfstest) |
 | Loop ext4 | [![Loop ext4 / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-git-annex.svg)](https://con.github.io/eval-under/#loop-ext4-git-annex) | [![Loop ext4 / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-git.svg)](https://con.github.io/eval-under/#loop-ext4-git) | [![Loop ext4 / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-stress-ng.svg)](https://con.github.io/eval-under/#loop-ext4-stress-ng) | [![Loop ext4 / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-pjdfstest.svg)](https://con.github.io/eval-under/#loop-ext4-pjdfstest) |
+| 9p tcp (diod) | [![9p tcp (diod) / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-tcp-git-annex.svg)](https://con.github.io/eval-under/#9p-tcp-git-annex) | [![9p tcp (diod) / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-tcp-git.svg)](https://con.github.io/eval-under/#9p-tcp-git) | [![9p tcp (diod) / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-tcp-stress-ng.svg)](https://con.github.io/eval-under/#9p-tcp-stress-ng) | [![9p tcp (diod) / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-tcp-pjdfstest.svg)](https://con.github.io/eval-under/#9p-tcp-pjdfstest) |
+| 9p virtio (mapped) | [![9p virtio (mapped) / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-virtio-mapped-git-annex.svg)](https://con.github.io/eval-under/#9p-virtio-mapped-git-annex) | [![9p virtio (mapped) / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-virtio-mapped-git.svg)](https://con.github.io/eval-under/#9p-virtio-mapped-git) | [![9p virtio (mapped) / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-virtio-mapped-stress-ng.svg)](https://con.github.io/eval-under/#9p-virtio-mapped-stress-ng) | [![9p virtio (mapped) / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/9p-virtio-mapped-pjdfstest.svg)](https://con.github.io/eval-under/#9p-virtio-mapped-pjdfstest) |
 <!-- END CI MATRIX -->
 
 Rows are **backends** (which filesystem the work happens on), columns
-are **targets** (which suite is run on it). All 20 cells are one job
+are **targets** (which suite is run on it). All 28 cells are one job
 matrix in [`.github/workflows/test.yaml`](.github/workflows/test.yaml),
 fanned out from [`.github/matrix.yaml`](.github/matrix.yaml) -- adding a
 filesystem or a suite is a data edit, not a code edit.
@@ -145,6 +147,20 @@ sudo bin/eval-under loop --fs xfs --size 200 --set-home -- \
 # the fsync-heavy slow path)
 sudo bin/eval-under nfs --set-home -- bash -c 'cd "$HOME" && git annex test'
 
+# Under 9p served by diod over localhost TCP (the no-VM 9p; root is
+# only used for the mount -- the server and the command run as you)
+sudo bin/eval-under 9p-tcp --set-home -- bash -c 'cd "$HOME" && git annex test'
+
+# Under the real Vagrant/QEMU virtio-9p stack: the command runs INSIDE
+# a virtme-ng guest booted from this host's own root filesystem. Needs
+# no sudo at all (KVM access aside); --cache loose reproduces the
+# classic vagrant stale-read foot-gun.
+bin/eval-under 9p-virtio --set-home -- bash -c 'cd "$HOME" && git annex test'
+bin/eval-under 9p-virtio --cache loose -- some-command
+
+# Poke around inside a live guest with the 9p mount up
+bin/eval-under 9p-virtio --shell
+
 # Skip teardown to poke around after a failure
 sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 
@@ -166,6 +182,8 @@ the full flag / env-var / default table per backend.
 | `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
 | `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
 | `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
+| `bin/eval-under-9p-tcp`                  | 9p backend, no VM: diod (9P2000.L) on localhost TCP + kernel v9fs mount            |
+| `bin/eval-under-9p-virtio`               | 9p backend, the Vagrant/QEMU stack: QEMU -virtfs into a virtme-ng guest            |
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |
@@ -179,7 +197,7 @@ the full flag / env-var / default table per backend.
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
 | `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
-| `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
+| `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 28 `test` cells, one `publish` job             |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)
@@ -198,6 +216,8 @@ sudo bin/eval-under beegfs --set-home -- bash -c '
 '
 sudo bin/eval-under nfs    --set-home -- git annex test
 sudo bin/eval-under loop --fs vfat --set-home -- git annex test
+sudo bin/eval-under 9p-tcp --set-home -- git annex test
+bin/eval-under 9p-virtio --set-home -- git annex test   # nested KVM is on
 
 # Or run a whole CI cell exactly as the runner would. install-target.sh
 # is the one-off prep (source builds land in $EVAL_UNDER_SRC_DIR, not on
@@ -205,6 +225,8 @@ sudo bin/eval-under loop --fs vfat --set-home -- git annex test
 bin/ci/install-target.sh pjdfstest
 sudo -E bin/ci/run-under.sh loop ext4 pjdfstest
 sudo -E bin/ci/run-under.sh nfs  n/a  stress-ng
+sudo -E bin/ci/run-under.sh 9p-tcp n/a pjdfstest
+sudo -E bin/ci/run-under.sh 9p-virtio mapped stress-ng
 ```
 
 Optional: install `act` in the VM to replay the GitHub workflow locally.

@@ -9,10 +9,11 @@
 #
 # Why a persistent file rather than just reading the current run: a run
 # does not necessarily cover every cell. GitHub's "Re-run failed jobs"
-# re-executes only the red ones, so a run's artifacts can describe 10 of
-# 20 cells. Deriving the whole grid from one run would rewrite the other
-# 10 badges to "unknown" and destroy good state. So results are merged,
-# and a cell absent from this run keeps whatever it last reported.
+# re-executes only the red ones, so a run's artifacts can describe a
+# fraction of the grid. Deriving the whole grid from one run would
+# rewrite every other badge to "unknown" and destroy good state. So
+# results are merged, and a cell absent from this run keeps whatever it
+# last reported.
 #
 # (This is a deliberate divergence from con/git-annex's update.py, which
 # sets absent tests to UNKNOWN. There, a client that stops reporting a

@@ -1,0 +1,601 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code
+#
+# eval-under-9p-virtio: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR
+# (and optionally HOME) pointing at a virtio-9p mount -- the actual stack
+# behind Vagrant/libvirt "9p" synced folders, WSL2 drive shares, and
+# QEMU -virtfs in general: QEMU's virtfs server on the host, the kernel
+# v9fs client in a guest, virtio in between.
+#
+# The guest comes from virtme-ng (vng): it boots a QEMU guest whose root
+# filesystem is a read-only view of the host's own root (with tmpfs
+# overlays), so every tool installed on the host -- git, git-annex,
+# prove, the bin/ci target scripts -- exists in the guest unchanged.
+# This script adds one more -virtfs device exporting a fresh scratch
+# dir, re-invokes itself inside the guest (--guest-stage2) to mount it
+# and run the wrapped command there, and propagates the exit status
+# back out (vng carries it over a dedicated virtio-serial channel).
+#
+# Notes that shape the implementation:
+#   - vng's rootfs is read-only outside its overlay set (/etc /lib /home
+#     /opt /srv /usr /var, plus a fresh tmpfs /tmp), so the *guest*
+#     mountpoint defaults to /tmp/eval-under-9p and --mount-point here
+#     names a guest path.  Writes to overlay paths evaporate with the
+#     guest; use --share-rw for host dirs that must receive writes.
+#   - vng's microvm machine has no PCI bus the stock Ubuntu/mainline
+#     guest kernels can enumerate, so --disable-microvm is passed to
+#     keep -virtfs (virtio-9p-pci) visible.
+#   - guest scripts run as root by default; the wrapped command is
+#     dropped to the invoking user inside the guest (runuser) unless
+#     --run-as-root, mirroring eval-under-nfs.
+#   - unlike the other backends this one needs NO root on the host for
+#     security models other than passthrough-as-root: QEMU, vng and the
+#     mount (which happens inside the guest) all run unprivileged.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+SELF="$here/$(basename "$0")"
+
+# Defaults (options override; env vars override defaults).
+MNT="${EVAL_UNDER_MOUNT:-/tmp/eval-under-9p}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
+SECMODEL="${EVAL_UNDER_9P_VIRTIO_SECURITY_MODEL:-mapped-xattr}"
+KERNEL="${EVAL_UNDER_9P_VIRTIO_KERNEL:-host}"
+MEMORY="${EVAL_UNDER_9P_VIRTIO_MEMORY:-2G}"
+CPUS="${EVAL_UNDER_9P_VIRTIO_CPUS:-$(nproc)}"
+MSIZE="${EVAL_UNDER_9P_VIRTIO_MSIZE:-}"
+CACHE="${EVAL_UNDER_9P_VIRTIO_CACHE:-}"
+WRITEOUT="${EVAL_UNDER_9P_VIRTIO_WRITEOUT:-}"
+RUN_AS_ROOT="${EVAL_UNDER_9P_VIRTIO_RUN_AS_ROOT:-0}"
+VM_TIMEOUT="${EVAL_UNDER_9P_VIRTIO_VM_TIMEOUT:-0}"
+ALLOW_TCG="${EVAL_UNDER_9P_VIRTIO_ALLOW_TCG:-0}"
+LOG="${EVAL_UNDER_9P_VIRTIO_LOG:-}"
+DEBUG_BOOT="${EVAL_UNDER_9P_VIRTIO_DEBUG_BOOT:-0}"
+SHELL_MODE=0
+TAG="eval9p"
+
+# Space-separated initial values from the environment; the flags append.
+read -r -a SHARE_RW <<< "${EVAL_UNDER_9P_VIRTIO_SHARE_RW:-}"
+read -r -a COPY_OUT <<< "${EVAL_UNDER_9P_VIRTIO_COPY_OUT:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: eval-under-9p-virtio [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a virtio-9p mount: a fresh scratch dir on the host is
+exported by QEMU's virtfs server (-virtfs local,...) into a virtme-ng
+guest booted from the host's own root filesystem, mounted there with
+`mount -t 9p -o trans=virtio`, and CMD runs INSIDE that guest. This is
+the stack Vagrant/libvirt "9p" synced folders use.
+
+Requires: virtme-ng (vng), qemu-system-x86; busybox for a pinned
+--kernel (package busybox-static); /dev/kvm strongly recommended.
+Install on Ubuntu 24.04: apt install virtme-ng virtiofsd busybox-static
+(22.04 has no virtme-ng package: pipx install virtme-ng).
+
+Unlike the other backends, no host root is needed except for
+--security-model passthrough served by a root QEMU (run the whole
+script under sudo for that). CI does run it under sudo -E; that is
+what makes its passthrough row "passthrough as root".
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT                    /tmp/eval-under-9p
+      GUEST path to mount the export on. Must be creatable in the
+      guest: vng's rootfs is read-only outside /etc /lib /home /opt
+      /srv /usr /var and a fresh tmpfs /tmp -- the default lives there
+      on purpose.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT            (unset)
+      Also set HOME=<mount>/home for the wrapped command.
+
+  --keep               EVAL_UNDER_KEEP                     (unset)
+      Keep the host-side backing dir + log after exit and print how to
+      relaunch. The guest itself always ends with the command; use
+      --shell for an interactive look INSIDE a live guest. Note that
+      under mapped-xattr the kept files read host-side as mode 0600/0700
+      owned by the QEMU user, with the real metadata in user.virtfs.*
+      xattrs.
+
+  --shell                                                   (unset)
+      Instead of CMD, run an interactive bash inside the guest with the
+      mount already up (best-effort: the console is a virtio-serial
+      channel, so no job control). The morning-after-a-red-cell tool.
+
+  --security-model M   EVAL_UNDER_9P_VIRTIO_SECURITY_MODEL mapped-xattr
+      QEMU virtfs server model: mapped-xattr (ownership/mode/devices
+      faked in user.virtfs.* xattrs -- vagrant-libvirt accessmode
+      "mapped"), mapped-file, passthrough (real uids; wants a root
+      QEMU -- run this script under sudo), none (passthrough that
+      ignores chown failures -- vagrant-libvirt "squash").
+      NOTE vagrant-libvirt's *default* accessmode is passthrough under
+      an unprivileged QEMU; reproduce that by running this script
+      unprivileged with --security-model passthrough.
+
+  --kernel VER         EVAL_UNDER_9P_VIRTIO_KERNEL         host
+      Guest kernel. "host" boots the host's own kernel and modules (no
+      download; /boot/vmlinuz-* must be readable -- Ubuntu ships it
+      0600, so chmod +r it or run under sudo). A version tag like
+      "v6.8" makes vng download that Ubuntu mainline build (~180 MB
+      once, cached in ~/.cache/virtme-ng) -- what CI uses so the v9fs
+      client is pinned.
+
+  --memory SIZE        EVAL_UNDER_9P_VIRTIO_MEMORY         2G
+      Guest RAM (qemu -m syntax). Overlay writes live in guest RAM, so
+      a suite that writes a lot outside the mount needs headroom.
+
+  --cpus N             EVAL_UNDER_9P_VIRTIO_CPUS           nproc
+      Guest vCPUs.
+
+  --msize BYTES        EVAL_UNDER_9P_VIRTIO_MSIZE          (unset)
+      Client request size. Unset = kernel default (128 KiB since 5.15;
+      virtio transport caps at 512000).
+
+  --cache MODE         EVAL_UNDER_9P_VIRTIO_CACHE          (unset)
+      v9fs cache mode. Unset = kernel default (no caching, every
+      kernel era). `loose` is the classic vagrant stale-read foot-gun.
+
+  --writeout immediate EVAL_UNDER_9P_VIRTIO_WRITEOUT       (unset)
+      Pass writeout=immediate to the virtfs server -- what
+      vagrant-libvirt sets (wrpolicy="immediate"). Unset = QEMU default.
+
+  --run-as-root        EVAL_UNDER_9P_VIRTIO_RUN_AS_ROOT    (unset)
+      Keep the wrapped command running as root inside the guest
+      (default drops to the invoking user with runuser). The 9p analog
+      of eval-under-nfs's --no-root-squash; needed by pjdfstest and
+      stress-ng's chown/mknod stressors. Under mapped-xattr their
+      privileged ops "succeed" into xattr metadata -- that is the
+      measurement, see GOTCHAS.md.
+
+  --share-rw PATH      EVAL_UNDER_9P_VIRTIO_SHARE_RW       (none)
+      Host directory to share read-write into the guest at the same
+      path (vng --rwdir). Repeatable; env var is space-separated.
+      CAVEAT (measured): the share is not uid-faithful -- writes
+      arrive on the host as the daemon's identity (root when this
+      script runs under sudo), and a non-root guest process can fail
+      with EACCES inside a directory it just created. Fine for
+      root-only workflows; for suite outputs use --copy-out instead.
+
+  --copy-out PATH      EVAL_UNDER_9P_VIRTIO_COPY_OUT       (none)
+      Guest path (typically under one of vng's overlays, whose writes
+      are otherwise discarded with the guest) to copy back to the same
+      path on the host after the command finishes. Travels through the
+      9p export itself, so it needs no extra share; ownership on the
+      host is normalized to the invoking user. Repeatable; env var is
+      space-separated. CI uses it for git's t/test-results.
+
+  --vm-timeout S       EVAL_UNDER_9P_VIRTIO_VM_TIMEOUT     0 (off)
+      Host-side timeout around the whole guest. The per-target timeout
+      CI wraps around CMD runs *inside* the guest and cannot catch a
+      hung boot; this one can. Exit 124 = the VM was killed.
+
+  --allow-tcg          EVAL_UNDER_9P_VIRTIO_ALLOW_TCG      (unset)
+      Proceed without /dev/kvm (pure emulation, an order of magnitude
+      slower). Default is to fail fast with a clear message instead of
+      mutely blowing every suite budget.
+
+  --log FILE           EVAL_UNDER_9P_VIRTIO_LOG            /var/log/eval-under-9p-virtio.log
+      Host file receiving a copy of all guest console/suite output
+      (falls back to a mktemp path when unwritable, e.g. unprivileged
+      local runs). What bin/ci/dump-failure-logs.sh and the CI artifact
+      pick up after teardown.
+
+  --debug-boot         EVAL_UNDER_9P_VIRTIO_DEBUG_BOOT     (unset)
+      Add vng --show-boot-console --verbose: boot messages are
+      suppressed by default, so a boot-time failure is otherwise
+      silent.
+
+  -h, --help
+      Print this help.
+
+Internal (visible so a stuck run can be debugged by hand):
+
+  --guest-stage2 ...
+      The half of this script that runs inside the guest, as guest
+      root: modprobe + mount + usability probe + user drop + exec CMD.
+      The host half passes every argument shell-quoted through vng's
+      single command-string channel.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>            (a guest path here)
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home       (only if --set-home)
+  PATH                       = the host-side PATH, passed through
+
+Exit status: the wrapped command's, carried out of the guest by vng.
+Caveats: 124 with --vm-timeout means the VM itself was killed; 255 is
+also vng's own "guest died before reporting" sentinel, so a command
+exiting 255 is indistinguishable from a crash. No network inside the
+guest. Teardown removes the host backing dir (unless --keep).
+EOF
+}
+
+log() { printf '\nI: %s\n' "$*"; }
+
+# ---------------------------------------------------------------------------
+# Guest half. Runs first so none of the host-side setup below executes in
+# the guest. Everything here runs as guest root (vng script default).
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--guest-stage2" ]; then
+  shift
+  G_TAG="" G_MNT="" G_MOPTS="" G_PATH="$PATH" G_DROP_TO="" G_SET_HOME=0 G_SHELL=0
+  G_COPY_OUT=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --tag) G_TAG="$2"; shift 2 ;;
+      --mount-point) G_MNT="$2"; shift 2 ;;
+      --mount-opts) G_MOPTS="$2"; shift 2 ;;
+      --path) G_PATH="$2"; shift 2 ;;
+      --drop-to) G_DROP_TO="$2"; shift 2 ;;
+      --set-home) G_SET_HOME=1; shift ;;
+      --shell) G_SHELL=1; shift ;;
+      --copy-out) G_COPY_OUT+=("$2"); shift 2 ;;
+      --) shift; break ;;
+      *) echo "guest-stage2: unknown arg: $1" >&2; exit 2 ;;
+    esac
+  done
+  if [ -z "$G_TAG" ] || [ -z "$G_MNT" ] || [ -z "$G_MOPTS" ]; then
+    echo "guest-stage2: --tag/--mount-point/--mount-opts required" >&2
+    exit 2
+  fi
+
+  guest_dmesg_tail() {
+    echo "=== guest dmesg (9p/virtio, last 30) ===" >&2
+    dmesg 2>/dev/null | grep -iE '9p|virtio' | tail -30 >&2 || true
+  }
+
+  # Module load: a pinned mainline kernel has these preloaded by virtme's
+  # MODALIASES, the host kernel usually not. Best-effort; the mount is
+  # the real test.
+  modprobe -qa 9p 9pnet_virtio 2>/dev/null || true
+
+  mkdir -p "$G_MNT" || { echo "guest-stage2: cannot mkdir $G_MNT (read-only rootfs path? see --mount-point in --help)" >&2; exit 7; }
+  if ! mount -t 9p -o "$G_MOPTS" "$G_TAG" "$G_MNT"; then
+    echo "ERROR: mount -t 9p -o $G_MOPTS $G_TAG $G_MNT failed in the guest" >&2
+    echo "       (a missing mount tag usually means the -virtfs device is not visible)" >&2
+    guest_dmesg_tail
+    exit 7
+  fi
+
+  # Probe with a real create + write + read-back before handing over.
+  probe="$G_MNT/.eval-under-ready.$$"
+  if ! dd if=/dev/urandom of="$probe" bs=4k count=1 2>/dev/null \
+     || ! dd if="$probe" of=/dev/null bs=4k count=1 2>/dev/null; then
+    echo "ERROR: 9p mounted at $G_MNT but a create+write+read probe failed" >&2
+    guest_dmesg_tail
+    exit 6
+  fi
+  rm -f "$probe" 2>/dev/null || true
+
+  echo "I: guest kernel $(uname -r)"
+  grep -F " $G_MNT " /proc/mounts | sed 's/^/I: /' || true
+
+  if [ -n "$G_DROP_TO" ]; then
+    chown "$G_DROP_TO" "$G_MNT" 2>/dev/null || true
+  fi
+
+  RUN_HOME="${HOME:-/root}"
+  if [ "$G_SET_HOME" = 1 ]; then
+    RUN_HOME="$G_MNT/home"
+    if [ -n "$G_DROP_TO" ]; then
+      runuser -u "$G_DROP_TO" -- mkdir -p "$RUN_HOME"
+    else
+      mkdir -p "$RUN_HOME"
+    fi
+  fi
+
+  if [ "$G_SHELL" = 1 ]; then
+    echo "I: interactive guest shell; the mount is at $G_MNT (exit to end the VM)"
+    export HOME="$RUN_HOME" TMPDIR="$G_MNT" DATALAD_TESTS_TEMP_DIR="$G_MNT" PATH="$G_PATH"
+    if [ -n "$G_DROP_TO" ]; then
+      exec runuser -u "$G_DROP_TO" -- bash -i
+    fi
+    exec bash -i
+  fi
+
+  echo "I: running in guest${G_DROP_TO:+ (as $G_DROP_TO)}: $*"
+  rc=0
+  if [ -n "$G_DROP_TO" ]; then
+    runuser -u "$G_DROP_TO" -- \
+      env HOME="$RUN_HOME" TMPDIR="$G_MNT" DATALAD_TESTS_TEMP_DIR="$G_MNT" PATH="$G_PATH" \
+      "$@" || rc=$?
+  else
+    env HOME="$RUN_HOME" TMPDIR="$G_MNT" DATALAD_TESTS_TEMP_DIR="$G_MNT" PATH="$G_PATH" \
+      "$@" || rc=$?
+  fi
+  # Ferry requested guest paths (typically overlay content that would
+  # otherwise vanish with the guest) out through the 9p export, as
+  # guest root, whatever the command's outcome -- failed runs are when
+  # the results matter most.
+  for p in ${G_COPY_OUT[@]+"${G_COPY_OUT[@]}"}; do
+    if [ -e "$p" ]; then
+      dest="$G_MNT/.eval-under-copyout$(dirname "$p")"
+      if mkdir -p "$dest" && cp -a "$p" "$dest/"; then
+        echo "I: copied out $p"
+      else
+        echo "W: copy-out of $p failed" >&2
+      fi
+    else
+      echo "I: copy-out path $p does not exist in the guest; skipping"
+    fi
+  done
+  if [ "$rc" -ne 0 ]; then
+    guest_dmesg_tail
+  fi
+  exit "$rc"
+fi
+
+# ---------------------------------------------------------------------------
+# Host half.
+# ---------------------------------------------------------------------------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    --shell) SHELL_MODE=1; shift ;;
+    --security-model) SECMODEL="$2"; shift 2 ;;
+    --kernel) KERNEL="$2"; shift 2 ;;
+    --memory) MEMORY="$2"; shift 2 ;;
+    --cpus) CPUS="$2"; shift 2 ;;
+    --msize) MSIZE="$2"; shift 2 ;;
+    --cache) CACHE="$2"; shift 2 ;;
+    --writeout) WRITEOUT="$2"; shift 2 ;;
+    --run-as-root) RUN_AS_ROOT=1; shift ;;
+    --share-rw) SHARE_RW+=("$2"); shift 2 ;;
+    --copy-out) COPY_OUT+=("$2"); shift 2 ;;
+    --vm-timeout) VM_TIMEOUT="$2"; shift 2 ;;
+    --allow-tcg) ALLOW_TCG=1; shift ;;
+    --log) LOG="$2"; shift 2 ;;
+    --debug-boot) DEBUG_BOOT=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+if [ "$SHELL_MODE" = 0 ] && [ $# -eq 0 ]; then
+  echo "no command given" >&2; usage >&2; exit 2
+fi
+
+case "$SECMODEL" in
+  mapped|mapped-xattr|mapped-file|passthrough|none) ;;
+  *) echo "unknown --security-model: $SECMODEL (mapped-xattr|mapped-file|passthrough|none)" >&2; exit 2 ;;
+esac
+
+# The user the wrapped command should run as inside the guest (the guest
+# sees the host's /etc/passwd through the shared rootfs).
+if [ -n "${SUDO_USER:-}" ]; then
+  INVOKER_USER="$SUDO_USER"; INVOKER_UID="${SUDO_UID:-0}"
+  INVOKER_GID="${SUDO_GID:-$INVOKER_UID}"
+else
+  INVOKER_USER="$(id -un)"; INVOKER_UID="$(id -u)"
+  INVOKER_GID="$(id -g)"
+fi
+[ "$INVOKER_UID" = 0 ] && RUN_AS_ROOT=1  # dropping root to root is a no-op
+
+ensure_virtio_installed() {
+  command -v vng >/dev/null 2>&1 || {
+    echo "ERROR: virtme-ng (vng) not installed." >&2
+    echo "  Install with: apt install virtme-ng   (Ubuntu 24.04+)" >&2
+    echo "            or: pipx install virtme-ng  (22.04 and other distros)" >&2
+    exit 3
+  }
+  command -v qemu-system-x86_64 >/dev/null 2>&1 || {
+    echo "ERROR: qemu-system-x86_64 not installed." >&2
+    echo "  Install with: apt install qemu-system-x86" >&2
+    exit 3
+  }
+  if [ "$KERNEL" != host ] && ! command -v busybox >/dev/null 2>&1; then
+    echo "ERROR: a pinned --kernel needs an initramfs, which vng builds with busybox." >&2
+    echo "  Install with: apt install busybox-static" >&2
+    exit 3
+  fi
+  if [ "$KERNEL" != host ] && ! command -v zstd >/dev/null 2>&1; then
+    echo "ERROR: mainline kernel debs ship .ko.zst modules; vng needs zstd for them" >&2
+    echo "  (the failure mode without it is an opaque guest death, exit 255)." >&2
+    echo "  Install with: apt install zstd" >&2
+    exit 3
+  fi
+  if [ "$KERNEL" = host ]; then
+    local vmlinuz
+    vmlinuz="/boot/vmlinuz-$(uname -r)"
+    if [ -e "$vmlinuz" ] && [ ! -r "$vmlinuz" ]; then
+      echo "ERROR: $vmlinuz is not readable (Ubuntu ships it 0600)." >&2
+      echo "  Run under sudo, chmod +r it, or use --kernel v<X.Y> instead." >&2
+      exit 3
+    fi
+  fi
+  if [ ! -e /dev/kvm ]; then
+    if [ "$ALLOW_TCG" != 0 ]; then
+      echo "W: no /dev/kvm -- continuing under TCG emulation (SLOW)" >&2
+    else
+      echo "ERROR: no /dev/kvm. A TCG-emulated guest is an order of magnitude" >&2
+      echo "  slower and blows every suite budget; pass --allow-tcg to insist." >&2
+      exit 3
+    fi
+  fi
+  if ! command -v virtiofsd >/dev/null 2>&1 \
+     && [ ! -x /usr/lib/virtiofsd ] && [ ! -x /usr/libexec/virtiofsd ] \
+     && [ ! -x /usr/lib/qemu/virtiofsd ]; then
+    echo "W: no virtiofsd found; vng will fall back to a 9p rootfs (slower boot," >&2
+    echo "   and the root filesystem shares the transport under test)." >&2
+  fi
+  # The guest boots this host's own rootfs, so guest-side plumbing
+  # depends on host packages: virtme-init needs udevd to surface the
+  # virtio-serial script ports (without it the guest powers off with
+  # "cannot find script I/O ports" and vng reports its 255 sentinel).
+  # Present on any normal Ubuntu install; missing in minimal containers.
+  if ! command -v udevadm >/dev/null 2>&1; then
+    echo "W: no udev on this host -- the guest will likely fail with" >&2
+    echo "   'cannot find script I/O ports'. Install with: apt install udev" >&2
+  fi
+}
+
+# Host-side backing dir that QEMU exports. Its path is embedded in a
+# comma-separated -virtfs value and in a space-joined qemu-opts string,
+# so refuse the characters that would silently corrupt those.
+ORIG="$(mktemp -d "${TMPDIR:-/tmp}/eval-under-9p-XXXXX.orig")"
+case "$ORIG" in
+  *[,\ ]*) echo "ERROR: backing dir path '$ORIG' contains a comma or space (set TMPDIR elsewhere)" >&2; exit 2 ;;
+esac
+
+if [ -z "$LOG" ]; then
+  LOG=/var/log/eval-under-9p-virtio.log
+  if ! touch "$LOG" 2>/dev/null; then
+    LOG="$(mktemp "${TMPDIR:-/tmp}/eval-under-9p-virtio-XXXXX.log")"
+  fi
+fi
+
+MOPTS="trans=virtio,version=9p2000.L"
+[ -n "$MSIZE" ] && MOPTS="$MOPTS,msize=$MSIZE"
+[ -n "$CACHE" ] && MOPTS="$MOPTS,cache=$CACHE"
+
+VIRTFS="local,path=$ORIG,mount_tag=$TAG,security_model=$SECMODEL,id=$TAG"
+[ -n "$WRITEOUT" ] && VIRTFS="$VIRTFS,writeout=$WRITEOUT"
+
+build_vng_cmd() {
+  VNG_CMD=(vng)
+  [ "$KERNEL" != host ] && VNG_CMD+=(--run "$KERNEL")
+  # microvm has no PCI bus the stock guest kernels can enumerate; the
+  # -virtfs device below is virtio-9p-pci, so force a PCI-ful machine.
+  VNG_CMD+=(--disable-microvm --memory "$MEMORY" --cpus "$CPUS")
+  local d
+  for d in ${SHARE_RW[@]+"${SHARE_RW[@]}"}; do
+    VNG_CMD+=(--rwdir "$d")
+  done
+  # =-joined: the value starts with a dash and argparse would otherwise
+  # read it as the next option.
+  VNG_CMD+=("--qemu-opts=-virtfs $VIRTFS")
+  if [ "$DEBUG_BOOT" != 0 ]; then
+    # vng 1.22 has no separate boot-console flag; --verbose shows the
+    # boot console and the underlying virtme-run line.
+    VNG_CMD+=(--verbose)
+  fi
+}
+
+# The command travels through exactly two shell layers, so quoting is
+# OUR job, done in two matching passes:
+#
+#   layer 1: vng embeds the joined words after `--` verbatim inside
+#            double quotes in a `virtme-run ... --script-sh "..."`
+#            line and runs it via `sh -c` (check_call(shell=True)) --
+#            a POSIX double-quote context, which consumes one level of
+#            \\ \" \$ \` escapes;
+#   layer 2: virtme-run base64s the surviving string through the kernel
+#            cmdline and the guest executes it as a *bash* script.
+#
+# So: printf %q makes each argument safe for the guest bash (layer 2),
+# and dq_escape pre-compensates the double-quote context (layer 1) so
+# the %q text arrives in the guest byte-identical. Without the second
+# pass, a wrapped `bash -c 'cd "$HOME" && ...'` would have $HOME
+# expanded one layer early, as guest root.
+dq_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//\$/\\\$}
+  s=${s//\`/\\\`}
+  printf '%s' "$s"
+}
+
+build_stage2_string() {
+  local args=("$SELF" --guest-stage2
+              --tag "$TAG" --mount-point "$MNT" --mount-opts "$MOPTS"
+              --path "$PATH")
+  [ "$SET_HOME" = 1 ] && args+=(--set-home)
+  [ "$RUN_AS_ROOT" = 0 ] && args+=(--drop-to "$INVOKER_USER")
+  [ "$SHELL_MODE" = 1 ] && args+=(--shell)
+  local c
+  for c in ${COPY_OUT[@]+"${COPY_OUT[@]}"}; do
+    args+=(--copy-out "$c")
+  done
+  args+=(--)
+  local a
+  STAGE2_STR=""
+  for a in "${args[@]}" "$@"; do
+    STAGE2_STR+="$(dq_escape "$(printf '%q' "$a")") "
+  done
+}
+
+# Invoked only via the EXIT trap; shellcheck's reachability analysis
+# cannot see that and calls the body unreachable (same annotation as
+# matrix.sh carries for its trap/return fallback).
+# shellcheck disable=SC2317
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving backing dir + log (exit=$rc)"
+    echo "I:   backing dir: $ORIG   (mapped-xattr metadata lives in user.virtfs.* xattrs)"
+    echo "I:   guest log:   $LOG"
+    echo "I:   relaunch interactively with:  $0 --shell ${SECMODEL:+--security-model $SECMODEL}"
+    return "$rc"
+  fi
+  rm -rf "$ORIG" 2>/dev/null || true
+  # $LOG is deliberately kept: it is what bin/ci/dump-failure-logs.sh
+  # and the CI artifact read after this process is gone.
+  return "$rc"
+}
+trap teardown EXIT
+
+ensure_virtio_installed
+build_vng_cmd
+build_stage2_string "$@"
+
+log "guest: kernel=$KERNEL mem=$MEMORY cpus=$CPUS log=$LOG"
+if [ "${#SHARE_RW[@]}" -gt 0 ]; then
+  log "rw dirs shared into guest: ${SHARE_RW[*]}"
+fi
+log "virtfs: $VIRTFS"
+log "mount (in guest): -t 9p -o $MOPTS $TAG $MNT"
+
+RUNNER=("${VNG_CMD[@]}" -- "$STAGE2_STR")
+if [ "$VM_TIMEOUT" != 0 ]; then
+  RUNNER=(timeout --kill-after=30 "$VM_TIMEOUT" "${RUNNER[@]}")
+fi
+
+rc=0
+if [ "$SHELL_MODE" = 1 ]; then
+  # Interactive: no tee (it would steal the terminal).
+  "${RUNNER[@]}" || rc=$?
+else
+  "${RUNNER[@]}" 2>&1 | tee -a "$LOG" || true
+  rc="${PIPESTATUS[0]}"
+fi
+
+# Retrieve --copy-out payloads from the export's backing dir onto their
+# real host paths, normalizing ownership: under mapped-xattr the
+# backing files carry the QEMU process's uid and 0600/0700 modes, which
+# a later artifact-upload step could not even read.
+for p in ${COPY_OUT[@]+"${COPY_OUT[@]}"}; do
+  src="$ORIG/.eval-under-copyout$p"
+  if [ -e "$src" ]; then
+    mkdir -p "$(dirname "$p")"
+    cp -r --no-preserve=mode,ownership "$src" "$(dirname "$p")/"
+    if [ "$(id -u)" -eq 0 ]; then
+      chown -R "$INVOKER_UID:$INVOKER_GID" "$p"
+    fi
+    log "copied back $p"
+  else
+    echo "W: no copy-out payload for $p (guest never wrote it?)" >&2
+  fi
+done
+
+if [ "$rc" -eq 124 ] && [ "$VM_TIMEOUT" != 0 ]; then
+  echo "W: exit 124 -- either the wrapped command hit its own timeout inside the" >&2
+  echo "   guest (a dmesg tail above means the guest was alive to report it), or" >&2
+  echo "   the VM exceeded --vm-timeout ${VM_TIMEOUT}s and was killed from outside." >&2
+elif [ "$rc" -eq 255 ]; then
+  echo "W: exit 255 -- either the wrapped command exited 255, or the guest died" >&2
+  echo "   before reporting (vng's sentinel). Re-run with --debug-boot to see boot." >&2
+fi
+exit "$rc"

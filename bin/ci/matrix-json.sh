@@ -14,10 +14,12 @@
 #   name     job name, e.g. "BeeGFS 7.4.6 / git testsuite". Set as the
 #            job's `name:` so the checks list reads like the README grid
 #            instead of GitHub's default "test (beegfs, 7.4.6, git)".
-#   backend  eval-under backend        (beegfs | nfs | loop)
+#   backend  eval-under backend        (beegfs | nfs | loop | 9p-*)
 #   version  backend version, or "n/a"
 #   target   suite to run under it
 #   slug     filename-safe cell id, for artifact names
+#   runs-on  runner image for this cell (per-backend in matrix.yaml,
+#            default ubuntu-22.04)
 #
 # usage:
 #   bin/ci/matrix-json.sh            # all cells
@@ -34,9 +36,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 entries=()
 for cell in "${EVAL_UNDER_BACKENDS[@]}"; do
-    IFS='|' read -r backend version label <<< "$cell"
+    IFS='|' read -r backend version label runs_on <<< "$cell"
     for target in "${EVAL_UNDER_TARGETS[@]}"; do
-        entries+=("$backend|$version|$label|$target|$(target_label "$target")|$(cell_slug "$backend" "$version" "$target")")
+        entries+=("$backend|$version|$label|$runs_on|$target|$(target_label "$target")|$(cell_slug "$backend" "$version" "$target")")
     done
 done
 
@@ -48,13 +50,14 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
-    backend, version, blabel, target, tlabel, slug = line.split("|")
+    backend, version, blabel, runs_on, target, tlabel, slug = line.split("|")
     include.append({
         "name": "%s / %s" % (blabel, tlabel),
         "backend": backend,
         "version": version,
         "target": target,
         "slug": slug,
+        "runs-on": runs_on,
     })
 
 if not include:

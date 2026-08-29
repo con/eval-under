@@ -51,8 +51,13 @@ def q(v):
 
 out = []
 out.append("EVAL_UNDER_TARGETS=(%s)" % " ".join(q(t["name"]) for t in targets))
+# Four-field tuple; consumers destructure with
+# `IFS='|' read -r backend version label runs_on`. runs-on is optional
+# in the YAML (default ubuntu-22.04) so existing rows stay untouched.
 out.append("EVAL_UNDER_BACKENDS=(%s)" % " ".join(
-    q("%s|%s|%s" % (b["backend"], b["version"], b["label"])) for b in backends))
+    q("%s|%s|%s|%s" % (b["backend"], b["version"], b["label"],
+                       b.get("runs-on", "ubuntu-22.04")))
+    for b in backends))
 
 out.append("declare -A _EU_LABEL=(%s)" % " ".join(
     "[%s]=%s" % (q(t["name"]), q(t["label"])) for t in targets))
@@ -70,6 +75,7 @@ out.append(": \"${EVAL_UNDER_REPO_SLUG:=%s}\"" % q(d["repo-slug"]))
 out.append(": \"${EVAL_UNDER_SRC_DIR:=%s}\"" % q(d["src-dir"]))
 out.append(": \"${EVAL_UNDER_GIT_REF:=%s}\"" % q(d["refs"]["git"]))
 out.append(": \"${EVAL_UNDER_PJDFSTEST_REF:=%s}\"" % q(d["refs"]["pjdfstest"]))
+out.append(": \"${EVAL_UNDER_9P_KERNEL_REF:=%s}\"" % q(d["refs"]["9p-kernel"]))
 
 print("\n".join(out))
 PYEOF
@@ -83,7 +89,7 @@ PYEOF
 }
 
 export EVAL_UNDER_REPO_SLUG EVAL_UNDER_SRC_DIR
-export EVAL_UNDER_GIT_REF EVAL_UNDER_PJDFSTEST_REF
+export EVAL_UNDER_GIT_REF EVAL_UNDER_PJDFSTEST_REF EVAL_UNDER_9P_KERNEL_REF
 
 # Filename-safe identifier for a backend cell: "beegfs-7.4.6", "nfs",
 # "loop-vfat".
