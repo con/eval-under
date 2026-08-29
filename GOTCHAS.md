@@ -220,6 +220,26 @@ the job log alone.
 If a cell produces no summary at all, the suite died before finishing --
 check the mount actually came up.
 
+## Reading a timing number
+
+Timings come from `bin/ci/bench-matrix.sh` (see the README), never from
+CI: each matrix cell runs on a different hosted runner, so two job
+durations are two machines, not two filesystems. Even run locally, four
+things decide whether a number means anything.
+
+| Trap | What it does to the number | Handled by |
+| --- | --- | --- |
+| Scratch on `/tmp` | `/tmp` is tmpfs on many systems, so the loop backing image lives in RAM and the loop rows come out several times too fast | Default `--scratch /var/tmp`; `env.txt` records the scratch filesystem |
+| Backend setup counted as suite time | BeeGFS spends ~60s booting its container cluster before the suite starts; charged to the filesystem it swamps a short target | `bin/ci/time-it.sh` runs inside the mount, setup lands in the report's `setup` column |
+| A warm page cache | Whichever backend ran first pays for the cold cache, the rest inherit it | Caches dropped before each run unless `--no-drop-caches` |
+| A red or timed-out cell | A suite that aborts early "finishes" quickly -- vfat looks like the fastest filesystem in the matrix | `status` column, plus the note under the table; raise `--timeout` and re-run |
+
+What no local driver can subtract: the BeeGFS servers are containers on
+the same host and NFS goes through the loopback stack, so those rows
+include server CPU that the loop rows do not. A ratio measured here
+describes this topology -- one box, everything colocated -- and not a
+real cluster with the servers on the far side of a network.
+
 ## Not yet covered
 
 - **NFS variants.** One localhost export with kernel-negotiated defaults

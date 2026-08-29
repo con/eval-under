@@ -174,6 +174,9 @@ the full flag / env-var / default table per backend.
 | `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
 | `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
+| `bin/ci/bench-matrix.sh`                 | Local timing driver: one target across every backend, one machine, N repetitions   |
+| `bin/ci/bench-report.py`                 | Renders a bench run's `results.tsv` into the per-target comparison table           |
+| `bin/ci/time-it.sh`                      | Stopwatch run inside the mount, so backend setup is not charged to the suite       |
 | `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                       |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
@@ -206,6 +209,77 @@ bin/ci/install-target.sh pjdfstest
 sudo -E bin/ci/run-under.sh loop ext4 pjdfstest
 sudo -E bin/ci/run-under.sh nfs  n/a  stress-ng
 ```
+
+### Timing comparisons across filesystems
+
+CI answers "does this cell pass". It cannot answer "how much slower is
+`git annex test` on BeeGFS than on ext4": every cell lands on a
+*different* hosted runner, with its own CPU, disk and noisy neighbours,
+so the wall-clock times in two jobs are not comparable. For that, run the
+column yourself -- one machine, one sitting, one git-annex build:
+
+```bash
+# `git annex test` on every backend, 3 repetitions each
+sudo bin/ci/bench-matrix.sh --repeat 3 git-annex
+
+# Look before you leap; then a subset with a bigger budget
+bin/ci/bench-matrix.sh --list --backends "loop/ext4 nfs" git-annex
+sudo bin/ci/bench-matrix.sh --backends "loop/ext4 nfs" --timeout 7200 git-annex
+
+# Any target(s), and the targets' own knobs are forwarded across sudo
+sudo EVAL_UNDER_GIT_TESTS='t00*.sh' bin/ci/bench-matrix.sh git stress-ng
+```
+
+Output lands in `/var/tmp/eval-under-bench/<stamp>/` (`--outdir` to
+change): `results.tsv` (raw, one row per repetition), `report.txt` and
+`report.md` (the comparison -- re-render anytime with `bin/ci/bench-report.py
+results.tsv`), `env.txt` (kernel, CPU, RAM, scratch filesystem, tool
+versions: a timing table without the box it came from is not reusable),
+and `logs/` with every run's full output.
+
+```
+=== git-annex: suite seconds by backend ===
+backend       n  min    median  max    x loop-ext4  setup  status
+loop-ext4     3  10.2m  10.3m   10.3m  1.00         5.8    ok
+nfs           3  30.2m  30.9m   31.7m  3.01         9.0    ok
+beegfs-7.4.6  3  40.7m  41.2m   41.7m  4.01         90.0   failx1, okx2
+```
+
+What the driver holds constant, and what it cannot:
+
+- **The suite is timed, not the cell.** `bin/ci/time-it.sh` runs *inside*
+  the eval-under wrapper, so mkfs, the BeeGFS cluster's ~60s bring-up and
+  the NFS export show up in the `setup` column instead of being charged
+  to the filesystem.
+- **Repetitions are the outer loop** -- every backend once, then again --
+  so drift on the box (thermal, a background process) spreads across all
+  rows instead of penalising whichever ran last. The comparison uses the
+  median; `min`/`max` are there to show you how noisy it was.
+- **The page cache is dropped before each run** (`--no-drop-caches` to
+  keep it), so a backend does not inherit the previous one's cache.
+- **Scratch defaults to `/var/tmp`, not `/tmp`.** The loop backing image
+  and the NFS export directory live there, and `/tmp` is tmpfs on many
+  systems -- a RAM-backed loop image measures memory bandwidth, not a
+  filesystem. `--scratch` to point it elsewhere; `env.txt` records what
+  it actually was.
+- **A red cell's time is not a time.** A suite that fails early or is
+  killed at its timeout is flagged in the `status` column and called out
+  under the table. Raise `--timeout` and re-run before comparing a
+  backend that hit it -- the matrix timeouts are CI budgets, not
+  measurement windows.
+- **BeeGFS and NFS pay for their own servers here.** The BeeGFS cluster
+  is containers on the same host (`network_mode: host`) and NFS goes
+  through the loopback stack, so both spend CPU that the loop backend
+  does not. Inherent to a single-machine comparison, and not something
+  the driver can subtract: "4x slower" means 4x *on this topology*, not
+  4x on a real cluster.
+- **git-annex is whatever is on `PATH`.** Install it once, before the
+  run (`bin/ci/install-git-annex-daily.sh`), and don't upgrade mid-run --
+  `env.txt` records the version so a later comparison can be rejected
+  rather than silently mixed.
+
+`--skip-install` skips the `install-backend.sh` / `install-target.sh`
+pass on a re-run; `--dry-run` prints the commands and runs nothing.
 
 Optional: install `act` in the VM to replay the GitHub workflow locally.
 

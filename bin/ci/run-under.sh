@@ -23,6 +23,10 @@
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
 #   EVAL_UNDER_LOOP_SIZE_MB    loop backing image size
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built the suites
+#   EVAL_UNDER_TIME_FILE       if set, bin/ci/time-it.sh appends
+#                              "<seconds>\t<exit code>" for the suite to
+#                              this file (used by bin/ci/bench-matrix.sh;
+#                              unset in CI)
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -67,8 +71,16 @@ runner="$here/target-$TARGET.sh"
 
 echo "I: $(target_label "$TARGET") under $BACKEND/$VERSION (timeout ${TIMEOUT}s)"
 
+# Optional stopwatch for bin/ci/bench-matrix.sh. Deliberately wrapped
+# *inside* eval-under, around the suite alone: the backend's own setup
+# (mkfs, the BeeGFS cluster bring-up, the NFS export) is not suite time
+# and must not be charged to it. Empty array = no wrapper, which is what
+# CI runs.
+timer=()
+[ -n "${EVAL_UNDER_TIME_FILE:-}" ] && timer=("$here/time-it.sh" "$EVAL_UNDER_TIME_FILE")
+
 # Sudo is expected to be in place already (workflow uses `sudo -E`); the
 # script itself just forwards. The timeout keeps a runaway suite from
 # hitting the workflow-level timeout with no signal of its own.
 exec "$here/../eval-under" "$BACKEND" "${opts[@]}" --set-home -- \
-    timeout "$TIMEOUT" "$runner"
+    "${timer[@]}" timeout "$TIMEOUT" "$runner"
