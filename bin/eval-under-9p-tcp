@@ -163,8 +163,14 @@ start_diod() {
   log "creating backing dir $ORIG (owned by uid=$INVOKER_UID gid=$INVOKER_GID)"
   "${SUDO[@]}" mkdir -p "$ORIG"
   "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$ORIG"
-  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$DIOD_LOG"
 
+  # The log stays owned by whoever this script runs as: the redirects
+  # below are performed by the current shell and diod only inherits the
+  # open fd, so diod's own uid never needs write access to the file.
+  # (Do NOT chown it to the invoker: with the script running as root,
+  # fs.protected_regular then blocks root's O_CREAT append in sticky
+  # /tmp -- "Permission denied" before diod ever starts.)
+  #
   # --foreground so it stays our child (we background + kill it
   # ourselves); --no-auth because munge has no place in a loopback
   # throwaway export.
@@ -175,8 +181,8 @@ start_diod() {
   elif [ "$INVOKER_UID" != "$(id -u)" ]; then
     log "starting diod as $INVOKER_USER (single-user): 127.0.0.1:$PORT <- $ORIG"
     # The redirect deliberately happens in the current (root) shell, not
-    # under sudo -- the log was chown'd to the invoker above, and both
-    # sides can write it.
+    # under sudo: the shell owns the log and opens the fd, diod merely
+    # inherits it.
     # shellcheck disable=SC2024
     sudo -u "$INVOKER_USER" diod --foreground --no-auth \
       --listen "127.0.0.1:$PORT" --export "$ORIG" >>"$DIOD_LOG" 2>&1 &
