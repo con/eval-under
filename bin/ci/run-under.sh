@@ -84,10 +84,13 @@ case "$BACKEND" in
                   --kernel "$EVAL_UNDER_9P_KERNEL_REF"
                   --memory 4G
                   --vm-timeout $((TIMEOUT + 300)))
-            # Suites that write results onto the runner's disk (git's
-            # t/test-results) need that dir shared read-write into the
-            # guest; everything else in the guest's overlay evaporates.
-            [ -d "$EVAL_UNDER_SRC_DIR" ] && opts+=(--share-rw "$EVAL_UNDER_SRC_DIR")
+            # git writes its per-script logs into the source tree;
+            # inside the guest that tree is a discardable overlay (vng
+            # --rwdir is deliberately NOT used: it is not uid-faithful,
+            # see the backend's --share-rw caveat), so ferry the
+            # results back through the 9p export instead for the
+            # artifact upload.
+            [ "$TARGET" = git ] && opts+=(--copy-out "$EVAL_UNDER_SRC_DIR/git/t/test-results")
             target_needs_root "$TARGET" && opts+=(--run-as-root) ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac

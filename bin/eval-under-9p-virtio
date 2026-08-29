@@ -60,8 +60,9 @@ DEBUG_BOOT="${EVAL_UNDER_9P_VIRTIO_DEBUG_BOOT:-0}"
 SHELL_MODE=0
 TAG="eval9p"
 
-# Space-separated initial value from the environment; --share-rw appends.
+# Space-separated initial values from the environment; the flags append.
 read -r -a SHARE_RW <<< "${EVAL_UNDER_9P_VIRTIO_SHARE_RW:-}"
+read -r -a COPY_OUT <<< "${EVAL_UNDER_9P_VIRTIO_COPY_OUT:-}"
 
 usage() {
   cat <<'EOF'
@@ -155,9 +156,20 @@ Options (flag / env var / default / purpose):
 
   --share-rw PATH      EVAL_UNDER_9P_VIRTIO_SHARE_RW       (none)
       Host directory to share read-write into the guest at the same
-      path (vng --rwdir). Repeatable; env var is space-separated. CI
-      passes the target-suite source dir so test-results/ written by
-      the suite reach the host for artifact upload.
+      path (vng --rwdir). Repeatable; env var is space-separated.
+      CAVEAT (measured): the share is not uid-faithful -- writes
+      arrive on the host as the daemon's identity (root when this
+      script runs under sudo), and a non-root guest process can fail
+      with EACCES inside a directory it just created. Fine for
+      root-only workflows; for suite outputs use --copy-out instead.
+
+  --copy-out PATH      EVAL_UNDER_9P_VIRTIO_COPY_OUT       (none)
+      Guest path (typically under one of vng's overlays, whose writes
+      are otherwise discarded with the guest) to copy back to the same
+      path on the host after the command finishes. Travels through the
+      9p export itself, so it needs no extra share; ownership on the
+      host is normalized to the invoking user. Repeatable; env var is
+      space-separated. CI uses it for git's t/test-results.
 
   --vm-timeout S       EVAL_UNDER_9P_VIRTIO_VM_TIMEOUT     0 (off)
       Host-side timeout around the whole guest. The per-target timeout
@@ -215,6 +227,7 @@ log() { printf '\nI: %s\n' "$*"; }
 if [ "${1:-}" = "--guest-stage2" ]; then
   shift
   G_TAG="" G_MNT="" G_MOPTS="" G_PATH="$PATH" G_DROP_TO="" G_SET_HOME=0 G_SHELL=0
+  G_COPY_OUT=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --tag) G_TAG="$2"; shift 2 ;;
@@ -224,6 +237,7 @@ if [ "${1:-}" = "--guest-stage2" ]; then
       --drop-to) G_DROP_TO="$2"; shift 2 ;;
       --set-home) G_SET_HOME=1; shift ;;
       --shell) G_SHELL=1; shift ;;
+      --copy-out) G_COPY_OUT+=("$2"); shift 2 ;;
       --) shift; break ;;
       *) echo "guest-stage2: unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -297,6 +311,22 @@ if [ "${1:-}" = "--guest-stage2" ]; then
     env HOME="$RUN_HOME" TMPDIR="$G_MNT" DATALAD_TESTS_TEMP_DIR="$G_MNT" PATH="$G_PATH" \
       "$@" || rc=$?
   fi
+  # Ferry requested guest paths (typically overlay content that would
+  # otherwise vanish with the guest) out through the 9p export, as
+  # guest root, whatever the command's outcome -- failed runs are when
+  # the results matter most.
+  for p in ${G_COPY_OUT[@]+"${G_COPY_OUT[@]}"}; do
+    if [ -e "$p" ]; then
+      dest="$G_MNT/.eval-under-copyout$(dirname "$p")"
+      if mkdir -p "$dest" && cp -a "$p" "$dest/"; then
+        echo "I: copied out $p"
+      else
+        echo "W: copy-out of $p failed" >&2
+      fi
+    else
+      echo "I: copy-out path $p does not exist in the guest; skipping"
+    fi
+  done
   if [ "$rc" -ne 0 ]; then
     guest_dmesg_tail
   fi
@@ -321,6 +351,7 @@ while [ $# -gt 0 ]; do
     --writeout) WRITEOUT="$2"; shift 2 ;;
     --run-as-root) RUN_AS_ROOT=1; shift ;;
     --share-rw) SHARE_RW+=("$2"); shift 2 ;;
+    --copy-out) COPY_OUT+=("$2"); shift 2 ;;
     --vm-timeout) VM_TIMEOUT="$2"; shift 2 ;;
     --allow-tcg) ALLOW_TCG=1; shift ;;
     --log) LOG="$2"; shift 2 ;;
@@ -344,8 +375,10 @@ esac
 # sees the host's /etc/passwd through the shared rootfs).
 if [ -n "${SUDO_USER:-}" ]; then
   INVOKER_USER="$SUDO_USER"; INVOKER_UID="${SUDO_UID:-0}"
+  INVOKER_GID="${SUDO_GID:-$INVOKER_UID}"
 else
   INVOKER_USER="$(id -un)"; INVOKER_UID="$(id -u)"
+  INVOKER_GID="$(id -g)"
 fi
 [ "$INVOKER_UID" = 0 ] && RUN_AS_ROOT=1  # dropping root to root is a no-op
 
@@ -481,6 +514,10 @@ build_stage2_string() {
   [ "$SET_HOME" = 1 ] && args+=(--set-home)
   [ "$RUN_AS_ROOT" = 0 ] && args+=(--drop-to "$INVOKER_USER")
   [ "$SHELL_MODE" = 1 ] && args+=(--shell)
+  local c
+  for c in ${COPY_OUT[@]+"${COPY_OUT[@]}"}; do
+    args+=(--copy-out "$c")
+  done
   args+=(--)
   local a
   STAGE2_STR=""
@@ -534,6 +571,24 @@ else
   "${RUNNER[@]}" 2>&1 | tee -a "$LOG" || true
   rc="${PIPESTATUS[0]}"
 fi
+
+# Retrieve --copy-out payloads from the export's backing dir onto their
+# real host paths, normalizing ownership: under mapped-xattr the
+# backing files carry the QEMU process's uid and 0600/0700 modes, which
+# a later artifact-upload step could not even read.
+for p in ${COPY_OUT[@]+"${COPY_OUT[@]}"}; do
+  src="$ORIG/.eval-under-copyout$p"
+  if [ -e "$src" ]; then
+    mkdir -p "$(dirname "$p")"
+    cp -r --no-preserve=mode,ownership "$src" "$(dirname "$p")/"
+    if [ "$(id -u)" -eq 0 ]; then
+      chown -R "$INVOKER_UID:$INVOKER_GID" "$p"
+    fi
+    log "copied back $p"
+  else
+    echo "W: no copy-out payload for $p (guest never wrote it?)" >&2
+  fi
+done
 
 if [ "$rc" -eq 124 ] && [ "$VM_TIMEOUT" != 0 ]; then
   echo "ERROR: guest exceeded --vm-timeout ${VM_TIMEOUT}s and was killed (boot or mount hang?)" >&2

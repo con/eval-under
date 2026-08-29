@@ -150,6 +150,17 @@ the protocol at all (inotify for the guest's own operations works
 normally), which is also why `cache=loose` can serve stale data
 indefinitely.
 
+**vng's `--rwdir` shares are not uid-faithful** (measured on the
+runner's exact stack): writes arrive on the host as the sharing
+daemon's identity -- root when the backend runs under sudo -- and a
+non-root guest process gets `EACCES` inside a directory it just
+"successfully" created. This is why the git target's
+`t/test-results/**` travels via the backend's `--copy-out` (through
+the 9p export itself, ownership normalized to the invoker) rather than
+via `--share-rw`, and why the source tree's in-suite writes
+(`chainlinttmp`, `test-results`) are left to the guest's uid-faithful
+tmpfs overlay instead of a share.
+
 **The guest is disposable; the log is not.** Everything the suite and
 the guest console print is teed to `/var/log/eval-under-9p-virtio.log`
 on the host (stage2 appends the guest `dmesg` tail on failure), because

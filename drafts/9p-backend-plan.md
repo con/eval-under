@@ -80,10 +80,12 @@ and what settled them:
    `target_needs_root()` in run-under.sh; without it the pjdfstest
    cell would be a contentless setup-failure red.
 6. **Guest mountpoint defaults to `/tmp/eval-under-9p`.** vng's rootfs
-   is read-only outside its overlay set; `/mnt` would EROFS. `--share-rw`
-   exists because overlay writes evaporate with the guest -- CI shares
-   `$EVAL_UNDER_SRC_DIR` so git's `t/test-results/**` reaches the
-   runner for artifact upload.
+   is read-only outside its overlay set; `/mnt` would EROFS. Overlay
+   writes evaporate with the guest, and vng's `--rwdir` shares turned
+   out not to be uid-faithful (measured; see GOTCHAS) -- so git's
+   `t/test-results/**` reaches the runner via the backend's
+   `--copy-out`, which ferries guest paths back through the 9p export
+   itself with ownership normalized.
 7. **Host-side `--vm-timeout` around the whole guest.** The per-target
    `timeout` that run-under.sh wraps around the suite travels *into*
    the guest and cannot catch a boot or mount hang; CI passes
