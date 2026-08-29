@@ -46,11 +46,12 @@ jobs:
   test:
     needs: matrix
     name: ${{ matrix.name }}
-    # ubuntu-22.04: kernel 5.15/6.5, within BeeGFS 7.4.x and 8.x DKMS
-    # support. ubuntu-24.04 hosted runners ship 6.17-azure which BeeGFS
-    # kernel modules cannot build against. NFS + loop backends don't
-    # need this, but sharing the runner OS keeps the matrix uniform.
-    runs-on: ubuntu-22.04
+    # Per-cell runner image, from the backend row's optional `runs-on`
+    # in .github/matrix.yaml (default ubuntu-22.04: its kernel stays
+    # within BeeGFS DKMS support, while ubuntu-24.04 ships an azure
+    # kernel the BeeGFS modules cannot build against). The 9p rows
+    # override to ubuntu-24.04, where virtme-ng/virtiofsd are packaged.
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -98,12 +99,13 @@ jobs:
           name: logs-${{ matrix.slug }}
           path: |
             /var/log/beegfs-*
+            /var/log/eval-under-9p-virtio.log
             /opt/eval-under-src/git/t/test-results/**
           if-no-files-found: ignore
 
       # One tiny artifact per cell, read back by the `badges` job. A
       # matrix job cannot contribute to a `needs.*.outputs` map, so this
-      # is how a fan-out reports 20 individual verdicts to a fan-in.
+      # is how a fan-out reports its per-cell verdicts to a fan-in.
       - name: Record cell result
         if: always()
         run: |

@@ -86,6 +86,80 @@ a kernel module built against the runner's kernel.
 | Client conf | `fixtures/beegfs/beegfs-client.conf.template` | Auth disabled, all daemons on `127.0.0.1`, non-default ports (8004-8008) so nothing collides with the runner. |
 | `sysMountSanityCheckMS` | `0` **on v8 only** | BeeGFS v8 dropped the standalone `beegfs-helperd` binary; with no helperd the sanity check cannot complete and the mount would hang. v7 keeps the check. |
 
+### 9p tcp (`bin/eval-under-9p-tcp`)
+
+A fresh directory exported on `127.0.0.1` by diod (LLNL's 9P2000.L
+server, Ubuntu universe) and mounted with the kernel v9fs client --
+architecturally the NFS backend's sibling. Same client code as the
+virtio row below, different server.
+
+| Knob | Value | Why |
+| --- | --- | --- |
+| Server | `diod --foreground --no-auth --listen 127.0.0.1:5640 --export <dir>` | Loopback throwaway export; munge auth has no place here. |
+| Server identity | the *invoking user* (single-user mode), unless `--run-as-root` | diod's documented "simplest and safest" mode; also means the server itself needs no privilege. |
+| Mount (default) | `-t 9p -o trans=tcp,port=5640,version=9p2000.L,aname=<dir>,uname=<user>,access=<uid>` | diod's documented single-user pairing. `access=<uid>` restricts the mount to that uid -- root included, which is why the usability probe runs as the invoker. |
+| Mount (`--run-as-root`) | `...,uname=root,access=client`, diod as root | diod's documented multi-user (NFS-like) pairing; the 9p analog of `--no-root-squash`, applied by `target_needs_root()`. |
+| `msize` | not set -- kernel requests its default (128 KiB since 5.15), **diod caps at 64 KiB** | The `/proc/mounts` line the backend echoes records the effective value; results are relative to it. |
+| `cache` | not set -- kernel default, which is **no caching in every kernel era** | `--cache loose` exists to reproduce the classic stale-read foot-gun deliberately. |
+
+**diod locking is whole-file.** diod implements 9P `Tlock` as BSD
+`flock()` on the host file: byte-range `fcntl` locks collapse to
+whole-file locks, and diod's own docs say distributed record locking
+will deadlock ("test your use case!"). A locking red on this row is a
+diod-server finding first -- compare with the virtio row, whose server
+fakes locks differently (below), before blaming the client.
+
+### 9p virtio (`bin/eval-under-9p-virtio`)
+
+QEMU's virtfs server (`-virtfs local,...`) exporting a fresh host dir
+into a virtme-ng guest booted from the host's own root filesystem; the
+suite runs *inside the guest* on a `mount -t 9p -o trans=virtio` mount.
+This is the vagrant-libvirt `type: "9p"` synced-folder stack.
+
+| Knob | Value | Why |
+| --- | --- | --- |
+| Server | QEMU `-virtfs local,path=<dir>,mount_tag=eval9p,security_model=mapped-xattr` (the `mapped` row) | vagrant-libvirt `accessmode: "mapped"`. Ownership/mode/devices are faked in `user.virtfs.*` xattrs on the host files. |
+| Guest kernel (CI) | pinned in `.github/matrix.yaml` `refs: 9p-kernel` (`vng --run`, Ubuntu mainline build) | The v9fs *client is the kernel*: cache-mode rework landed in 6.4, netfs buffered writes in 6.8. Unpinned, a newly-red cell can't distinguish "filesystem regressed" from "client changed". Local runs default to the host kernel instead. |
+| Guest machine | `vng --disable-microvm` | vng's microvm has no PCI bus stock guest kernels can enumerate; `-virtfs` is virtio-9p-**pci**, so without this the mount tag silently never appears. |
+| Mount | `-t 9p -o trans=virtio,version=9p2000.L` (msize/cache unset = kernel defaults, as above; virtio transport caps msize at 512000) | The backend echoes the guest's `/proc/mounts` line and `uname -r` -- that pair is what a result is relative to. |
+| Command identity | dropped to the invoking user via `runuser` in the guest; `--run-as-root` keeps root (`target_needs_root()` rows) | A vagrant user's synced folder is an unprivileged view; guest scripts otherwise run as root in virtme. |
+| `writeout` | not set (QEMU default) | vagrant-libvirt sets `wrpolicy="immediate"`; `--writeout immediate` reproduces that when wanted. |
+
+**mapped-xattr absorbs privileged operations.** Under this security
+model `chown` "succeeds" into an xattr, and `mknod` creates a host
+*regular file* wearing a device-node xattr -- so pjdfstest's and
+stress-ng's privileged assertions pass or fail against the *mapping
+layer*, not a kernel. That is the measurement (it is exactly the
+"returns success while doing the wrong thing" class stress-ng exists to
+catch), but read those cells with this table in hand. Corollaries: unix
+sockets and FIFOs work unprivileged; host-side the backing files read
+as mode 0600/0700 owned by the QEMU user (`--keep` shows exactly that).
+
+**QEMU virtfs locking is a polite lie.** QEMU's 9p server answers every
+`TLOCK` with success (single-client assumption); the guest kernel takes
+the local VFS lock first, so locking is coherent *within* the guest and
+invisible to the host. Locks therefore mostly "work" on this row where
+diod's whole-file behavior differs -- a divergence between the two 9p
+rows on locking tests is expected, not noise.
+
+**Other v9fs client facts red cells trace back to** (both 9p rows):
+writable `MAP_SHARED` mmap fails `EINVAL` under the default no-cache
+mode (read-only mmap -- git's main use -- works); `O_TMPFILE` is
+unsupported (`EOPNOTSUPP`); there is no *remote*-change notification in
+the protocol at all (inotify for the guest's own operations works
+normally), which is also why `cache=loose` can serve stale data
+indefinitely.
+
+**The guest is disposable; the log is not.** Everything the suite and
+the guest console print is teed to `/var/log/eval-under-9p-virtio.log`
+on the host (stage2 appends the guest `dmesg` tail on failure), because
+by the time `dump-failure-logs.sh` runs, the guest -- and the backing
+dir, via teardown -- are gone. vng quirk worth knowing: exit **255**
+is also its "guest died before reporting" sentinel, so a suite exiting
+255 is indistinguishable from a crash; and exit **124** under CI is the
+backend's own `--vm-timeout` catching a boot/mount hang that the
+in-guest per-target timeout cannot see.
+
 ## Known-red cells
 
 A red cell here is a finding, not a bug report against this repo. These
@@ -228,6 +302,24 @@ check the mount actually came up.
   `actimeo=0`), locking (`lock` vs `nolock`, and whether `rpc.statd` is
   even up), `sync` vs `async` on the export, and squashing. Each is a
   plausible row of its own.
+- **The actual vagrant-libvirt 9p default.** vagrant-libvirt's default
+  `accessmode` is `passthrough`, and distro libvirt runs QEMU as an
+  unprivileged user -- so the out-of-the-box vagrant 9p share is
+  *passthrough served by a QEMU that cannot chown*, the very
+  configuration behind the classic "permission surprises". That is a
+  third variant, distinct from both the current `mapped` row and
+  passthrough-as-root. Reproduce it locally today:
+  `bin/eval-under-9p-virtio --security-model passthrough` run
+  *without* sudo. A `9p-virtio / passthrough` CI row (root QEMU) is the
+  cheap second row; the unprivileged flavour needs a small backend
+  tweak to skip sudo on that path.
+- **9p cache/msize variants.** `--cache loose` (the vagrant stale-read
+  foot-gun) and a small-`msize` row are one matrix line each once the
+  base rows have settled.
+- **virtiofs.** The designated successor to virtio-9p in the same
+  vagrant/QEMU role (`type: "virtiofs"`), and the natural control row
+  for "is this 9p, or any VM-shared filesystem?". Nearly free once the
+  vng plumbing exists: same guest, different device and server.
 - **Per-assertion breakdown** of the BeeGFS pjdfstest failures.
 - **A `Loop vfat` mask variant**, if we ever want to separate "vfat is
   not POSIX" from "vfat mounted with defaults is not POSIX".

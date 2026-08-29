@@ -43,6 +43,18 @@ apt-get install -y --no-install-recommends \
   nfs-kernel-server \
   dosfstools xfsprogs btrfs-progs
 
+log "eval-under-9p-tcp / eval-under-9p-virtio dependencies"
+# diod:            9P2000.L server for eval-under-9p-tcp.
+# virtme-ng:       boots the eval-under-9p-virtio guest (vng); the VM's
+#                  nested KVM (Vagrantfile: lv.nested) accelerates it.
+# qemu-system-x86: virtme-ng only Recommends it; --no-install-recommends.
+# virtiofsd:       vng rootfs transport (falls back to 9p without it).
+# busybox-static:  vng initramfs for pinned --kernel downloads.
+# zstd:            mainline kernel debs ship .ko.zst modules.
+# 9p client modules ship in the kernel's base linux-modules package.
+apt-get install -y --no-install-recommends \
+  diod virtme-ng qemu-system-x86 qemu-utils virtiofsd busybox-static zstd
+
 log "eval-under test-target dependencies"
 # stress-ng:                    bin/ci/target-stress-ng.sh (apt is the whole install).
 # autoconf/automake/libtool:    building pjdfstest from its pinned tag.

@@ -72,7 +72,7 @@ table_md() {
     printf '\n'
 
     for cell in "${EVAL_UNDER_BACKENDS[@]}"; do
-        IFS='|' read -r backend version label <<< "$cell"
+        IFS='|' read -r backend version label _runs_on <<< "$cell"
         printf '| %s |' "$label"
         for target in "${EVAL_UNDER_TARGETS[@]}"; do
             slug="$(cell_slug "$backend" "$version" "$target")"

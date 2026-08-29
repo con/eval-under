@@ -13,10 +13,13 @@
 # usage:
 #   bin/ci/run-under.sh <backend> <version> [target]
 #
-#   backend = beegfs | nfs | loop
-#   version = for beegfs: point release (e.g. 7.4.6, 8.1.0)
-#             for loop:   filesystem type (e.g. vfat, ext4)
-#             for nfs:    literal "n/a"
+#   backend = beegfs | nfs | loop | 9p-tcp | 9p-virtio
+#   version = for beegfs:    point release (e.g. 7.4.6, 8.1.0)
+#             for loop:      filesystem type (e.g. vfat, ext4)
+#             for nfs:       literal "n/a"
+#             for 9p-tcp:    literal "n/a"
+#             for 9p-virtio: QEMU virtfs security model row
+#                            (mapped -> mapped-xattr, passthrough)
 #   target  = git-annex (default) | git | stress-ng | pjdfstest
 #
 # env overrides:
@@ -59,6 +62,33 @@ case "$BACKEND" in
             # need an export that does not squash root, and need to keep
             # their privileges rather than being dropped to the invoker.
             target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
+    9p-tcp)
+            opts=()
+            # Same shape as NFS: the default is diod's single-user mode
+            # with the command dropped to the invoker; root-requiring
+            # suites need the multi-user export and their privileges.
+            target_needs_root "$TARGET" && opts=(--run-as-root) ;;
+    9p-virtio)
+            # The version token is the QEMU virtfs security-model row.
+            case "$VERSION" in
+                mapped)      secmodel=mapped-xattr ;;
+                passthrough) secmodel=passthrough ;;
+                *) echo "unknown 9p-virtio variant: $VERSION" >&2; exit 1 ;;
+            esac
+            # Pinned guest kernel: handed over explicitly, so the backend
+            # stays matrix-free and defaults to the host kernel locally.
+            # The VM timeout guards boot/mount hangs the in-guest
+            # per-target timeout cannot see; memory is CI-sized (the
+            # script's own default suits laptops).
+            opts=(--security-model "$secmodel"
+                  --kernel "$EVAL_UNDER_9P_KERNEL_REF"
+                  --memory 4G
+                  --vm-timeout $((TIMEOUT + 300)))
+            # Suites that write results onto the runner's disk (git's
+            # t/test-results) need that dir shared read-write into the
+            # guest; everything else in the guest's overlay evaporates.
+            [ -d "$EVAL_UNDER_SRC_DIR" ] && opts+=(--share-rw "$EVAL_UNDER_SRC_DIR")
+            target_needs_root "$TARGET" && opts+=(--run-as-root) ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
 

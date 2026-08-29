@@ -7,10 +7,10 @@
 # Render one status badge as a self-contained SVG on stdout.
 #
 # We draw these ourselves rather than linking shields.io endpoint
-# badges: the grid is 20 cells, so a README render would otherwise be
-# 20 third-party requests, and the badges would go blank whenever that
-# service is unreachable. An SVG committed to the `badges` branch has
-# neither problem and is diffable.
+# badges: the grid is dozens of cells, so a README render would
+# otherwise be dozens of third-party requests, and the badges would go
+# blank whenever that service is unreachable. An SVG committed to the
+# `badges` branch has neither problem and is diffable.
 #
 # Single-segment on purpose: in the README grid the row and column
 # headers already name the cell, so a "BeeGFS 7.4.6 / git" prefix on

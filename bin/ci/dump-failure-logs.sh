@@ -12,8 +12,12 @@
 #   bin/ci/dump-failure-logs.sh <backend> <version> [target]
 #
 # backend side:
-#   beegfs:   `docker compose logs` + dmesg-filtered-for-beegfs
-#   nfs/loop: full dmesg tail
+#   beegfs:    `docker compose logs` + dmesg-filtered-for-beegfs
+#   nfs/loop:  filtered dmesg tail
+#   9p-tcp:    filtered dmesg tail (the v9fs client logs there)
+#   9p-virtio: tail of the guest console/suite log the backend tees to
+#              /var/log/eval-under-9p-virtio.log (guest dmesg included
+#              on failure; the guest itself is gone by now)
 # target side:
 #   git:      the failing assertions + output from t/test-results/*.out
 
@@ -37,7 +41,7 @@ case "$BACKEND" in
         echo "=== dmesg (beegfs-tagged, last 50) ==="
         sudo dmesg | grep -i beegfs | tail -50 || true
         ;;
-    nfs|loop)
+    nfs|loop|9p-tcp)
         # Filtered rather than `dmesg | tail -100`: on a hosted runner the
         # last 100 kernel lines are almost entirely boot spam (hyperv, pci,
         # apparmor), which buries the failure in the job log. Warnings and
@@ -47,8 +51,20 @@ case "$BACKEND" in
         sudo dmesg --level=emerg,alert,crit,err,warn 2>/dev/null | tail -40 || true
         echo "=== dmesg (mentioning $BACKEND/$VERSION, last 30) ==="
         sudo dmesg 2>/dev/null \
-            | grep -iE "loop|nfs|${VERSION:-nomatch}" \
+            | grep -iE "loop|nfs|9p|${VERSION:-nomatch}" \
             | tail -30 || true
+        ;;
+    9p-virtio)
+        # The suite ran inside a virtme-ng guest that no longer exists;
+        # what survives is the console/suite log the backend tees on the
+        # host (stage2 appends the guest dmesg tail there on failure).
+        log="${EVAL_UNDER_9P_VIRTIO_LOG:-/var/log/eval-under-9p-virtio.log}"
+        echo "=== 9p-virtio guest log (last 120 lines of $log) ==="
+        if [ -r "$log" ]; then
+            tail -120 "$log" || true
+        else
+            echo "no log at $log (the guest never started?)"
+        fi
         ;;
     *)
         echo "unknown backend: $BACKEND" >&2

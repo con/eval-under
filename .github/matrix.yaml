@@ -34,6 +34,15 @@ src-dir: /opt/eval-under-src
 # did upstream add a test?).
 refs:
   git: v2.55.0
+  # Guest kernel for the 9p-virtio backend's CI rows (vng downloads the
+  # Ubuntu mainline build; tag-shaped, leading "v" required). The v9fs
+  # *client* is the kernel, and its semantics move between releases
+  # (cache-mode rework in 6.4, netfs buffered writes in 6.8) -- an
+  # unpinned guest kernel would make a newly-red 9p cell ambiguous in
+  # exactly the way these pins exist to prevent. Local runs default to
+  # the host kernel instead; this pin is handed to the backend
+  # explicitly by bin/ci/run-under.sh.
+  9p-kernel: v6.8
   # pjd/pjdfstest carries exactly one tag upstream, "0.1" (2016), and it
   # no longer builds: major()/minor()/makedev() moved to
   # <sys/sysmacros.h> in glibc 2.28 and the tree compiles with -Werror,
@@ -90,6 +99,12 @@ targets:
 
 # Row order of the README CI matrix. `version` is the literal "n/a" for
 # backends with nothing to pin (see bin/ci/install-backend.sh).
+#
+# `runs-on` (optional, default ubuntu-22.04) picks the runner image per
+# row: BeeGFS DKMS constrains its rows to 22.04, while the 9p rows want
+# 24.04, where virtme-ng/virtiofsd are packaged. Mixing images costs
+# some cross-row comparability (different host kernel and tool
+# versions) -- use it only when a backend actually needs it.
 backends:
   - backend: beegfs
     version: 7.4.6
@@ -106,3 +121,18 @@ backends:
   - backend: loop
     version: ext4
     label: Loop ext4
+  # v9fs client against diod (9P2000.L over TCP on localhost) -- the
+  # no-VM 9p row, architecturally the NFS backend's sibling.
+  - backend: 9p-tcp
+    version: n/a
+    label: 9p tcp (diod)
+    runs-on: ubuntu-24.04
+  # v9fs client against QEMU's virtfs server over virtio, inside a
+  # virtme-ng guest -- the vagrant-libvirt "9p" synced-folder stack.
+  # "mapped" = security_model=mapped-xattr (vagrant accessmode
+  # "mapped"); vagrant's *default* (passthrough under an unprivileged
+  # QEMU) is a future row, see GOTCHAS.md "Not yet covered".
+  - backend: 9p-virtio
+    version: mapped
+    label: 9p virtio (mapped)
+    runs-on: ubuntu-24.04

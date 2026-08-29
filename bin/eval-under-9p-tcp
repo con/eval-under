@@ -1,0 +1,304 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
+# SPDX-License-Identifier: MIT
+#
+# Generated with Claude Code
+#
+# eval-under-9p-tcp: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
+# optionally HOME) pointing at a 9p mount served over TCP by diod (LLNL's
+# 9P2000.L server) on localhost -- same architecture as eval-under-nfs
+# (local server + kernel client), different protocol and server.
+#
+# This exercises the kernel v9fs client against diod's server semantics.
+# For the QEMU/virtio-9p stack that Vagrant synced folders actually use,
+# see eval-under-9p-virtio; the v9fs client code is the same, the server
+# (and its locking/caching quirks) is not.
+
+set -eu
+
+# Defaults (options override; env vars override defaults).
+MNT="${EVAL_UNDER_MOUNT:-/mnt/9p}"
+KEEP="${EVAL_UNDER_KEEP:-0}"
+SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
+
+PORT="${EVAL_UNDER_9P_TCP_PORT:-5640}"
+MSIZE="${EVAL_UNDER_9P_TCP_MSIZE:-}"
+CACHE="${EVAL_UNDER_9P_TCP_CACHE:-}"
+RUN_AS_ROOT="${EVAL_UNDER_9P_TCP_RUN_AS_ROOT:-0}"
+STARTUP_WAIT="${EVAL_UNDER_9P_TCP_STARTUP_WAIT:-10}"
+
+usage() {
+  cat <<'EOF'
+Usage: eval-under-9p-tcp [OPTIONS] -- CMD [ARGS...]
+
+Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
+pointing at a 9p mount. A fresh backing directory is exported on
+127.0.0.1 by diod (9P2000.L) and mounted via `mount -t 9p -o trans=tcp`
+for the duration of the command.
+
+Requires the `diod` package (Ubuntu/Debian universe) and a kernel with
+9p client support (CONFIG_9P_FS; in the stock `linux-modules` package
+of Ubuntu generic/virtual/azure kernels).
+
+By default diod itself runs unprivileged AS THE INVOKING USER in its
+documented single-user mode (mount options uname=<user>,access=<uid>),
+and the wrapped command runs as that user too -- root is used only for
+the mount/umount pair. --run-as-root switches to diod's multi-user mode
+(server as root, access=client) and keeps the wrapped command as root,
+for suites that measure privileged behaviour.
+
+Options (flag / env var / default / purpose):
+
+  --mount-point PATH   EVAL_UNDER_MOUNT                /mnt/9p
+      Where to mount the export on the host.
+
+  --set-home           EVAL_UNDER_HOME_ON_MOUNT        (unset)
+      Also set HOME=<mount>/home for the wrapped command.
+
+  --keep               EVAL_UNDER_KEEP                 (unset)
+      Skip teardown; leave diod + mount up for debugging.
+
+  --port P             EVAL_UNDER_9P_TCP_PORT          5640
+      TCP port for diod on 127.0.0.1 (unprivileged; not 564 so nothing
+      collides with a system-wide 9p service).
+
+  --msize BYTES        EVAL_UNDER_9P_TCP_MSIZE         (unset)
+      Client request size. Unset = kernel default (128 KiB since 5.15)
+      -- which diod then negotiates down to its own 64 KiB cap.
+
+  --cache MODE         EVAL_UNDER_9P_TCP_CACHE         (unset)
+      v9fs cache mode (none|loose|fscache|mmap|...; readahead/writeback
+      on kernels >= 6.4). Unset = kernel default, which is no caching in
+      every kernel era. `loose` is the classic stale-read foot-gun.
+
+  --run-as-root        EVAL_UNDER_9P_TCP_RUN_AS_ROOT   (unset)
+      Run diod as root in multi-user mode (uname=root,access=client)
+      and keep the wrapped command running as root. Needed for suites
+      that measure privileged behaviour (pjdfstest, stress-ng's
+      chown/mknod stressors) -- the 9p analog of eval-under-nfs's
+      --no-root-squash.
+
+  --startup-wait S     EVAL_UNDER_9P_TCP_STARTUP_WAIT  10
+      Seconds to wait for diod to bind its port before giving up.
+
+  -h, --help
+      Print this help.
+
+Environment variables set FOR the wrapped command (all backends):
+
+  TMPDIR                     = <mount>
+  DATALAD_TESTS_TEMP_DIR     = <mount>
+  HOME                       = <mount>/home        (only if --set-home)
+
+Exit status: the wrapped command's exit status. Teardown runs on any
+exit (unless --keep).
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP=1; shift ;;
+    --mount-point) MNT="$2"; shift 2 ;;
+    --set-home) SET_HOME=1; shift ;;
+    --port) PORT="$2"; shift 2 ;;
+    --msize) MSIZE="$2"; shift 2 ;;
+    --cache) CACHE="$2"; shift 2 ;;
+    --run-as-root) RUN_AS_ROOT=1; shift ;;
+    --startup-wait) STARTUP_WAIT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null || {
+    echo "must run as root (or have sudo available)" >&2; exit 2; }
+  SUDO=(sudo)
+else
+  SUDO=()
+fi
+
+# Identify the invoking (non-root) user: diod's single-user mode serves
+# exactly one uid, and the wrapped command should run as the pre-sudo
+# user, mirroring eval-under-nfs's root_squash default.
+if [ -n "${SUDO_UID:-}" ]; then
+  INVOKER_UID="$SUDO_UID"; INVOKER_GID="${SUDO_GID:-$SUDO_UID}"
+  INVOKER_USER="${SUDO_USER:-$INVOKER_UID}"
+else
+  INVOKER_UID="$(id -u)"; INVOKER_GID="$(id -g)"
+  INVOKER_USER="$(id -un)"
+fi
+
+log() { printf '\nI: %s\n' "$*"; }
+
+ensure_9p_installed() {
+  command -v diod >/dev/null 2>&1 || {
+    echo "ERROR: diod not installed." >&2
+    echo "  Install with: apt install diod" >&2
+    exit 3
+  }
+  # 9p client modules live in the kernel's base linux-modules package
+  # (generic, virtual and azure flavours alike); modprobe is only needed
+  # because nothing else has loaded them yet. trans=tcp itself lives in
+  # 9pnet_fd (its own module since ~5.17), autoloaded on mount.
+  "${SUDO[@]}" modprobe -q 9p 2>/dev/null || true
+  grep -qw 9p /proc/filesystems || {
+    echo "ERROR: kernel has no 9p filesystem support (CONFIG_9P_FS)." >&2
+    echo "  On Ubuntu the modules ship in linux-modules-\$(uname -r);" >&2
+    echo "  a container kernel without them cannot run this backend." >&2
+    exit 3
+  }
+}
+
+# Backing dir that gets exported (distinct from the mountpoint so we
+# don't 9p-loop-back into ourselves).
+ORIG="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-9p-XXXXX").orig"
+DIOD_LOG="$(mktemp "${TMPDIR:-/tmp}/eval-under-9p-diod-XXXXX.log")"
+DIOD_PID=""
+
+start_diod() {
+  log "creating backing dir $ORIG (owned by uid=$INVOKER_UID gid=$INVOKER_GID)"
+  "${SUDO[@]}" mkdir -p "$ORIG"
+  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$ORIG"
+  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$DIOD_LOG"
+
+  # --foreground so it stays our child (we background + kill it
+  # ourselves); --no-auth because munge has no place in a loopback
+  # throwaway export.
+  if [ "$RUN_AS_ROOT" != 0 ]; then
+    log "starting diod as root (multi-user): 127.0.0.1:$PORT <- $ORIG"
+    "${SUDO[@]}" diod --foreground --no-auth \
+      --listen "127.0.0.1:$PORT" --export "$ORIG" >>"$DIOD_LOG" 2>&1 &
+  elif [ "$INVOKER_UID" != "$(id -u)" ]; then
+    log "starting diod as $INVOKER_USER (single-user): 127.0.0.1:$PORT <- $ORIG"
+    # The redirect deliberately happens in the current (root) shell, not
+    # under sudo -- the log was chown'd to the invoker above, and both
+    # sides can write it.
+    # shellcheck disable=SC2024
+    sudo -u "$INVOKER_USER" diod --foreground --no-auth \
+      --listen "127.0.0.1:$PORT" --export "$ORIG" >>"$DIOD_LOG" 2>&1 &
+  else
+    log "starting diod as $(id -un) (single-user): 127.0.0.1:$PORT <- $ORIG"
+    diod --foreground --no-auth \
+      --listen "127.0.0.1:$PORT" --export "$ORIG" >>"$DIOD_LOG" 2>&1 &
+  fi
+  DIOD_PID=$!
+
+  local waited=0
+  while [ "$waited" -lt "$STARTUP_WAIT" ]; do
+    if ! kill -0 "$DIOD_PID" 2>/dev/null; then
+      break  # died; report below
+    fi
+    if "${SUDO[@]}" ss -ltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$PORT"; then
+      log "diod is listening (pid $DIOD_PID, after ${waited}s)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "ERROR: diod did not bind 127.0.0.1:$PORT within ${STARTUP_WAIT}s" >&2
+  sed 's/^/  diod: /' "$DIOD_LOG" >&2 || true
+  exit 4
+}
+
+mount_9p() {
+  local mopts
+  # Option pairings are diod's documented ones: single-user mode serves
+  # exactly the invoking uid (uname=<user>,access=<uid>); multi-user
+  # mode is the NFS-like uname=root,access=client.
+  if [ "$RUN_AS_ROOT" != 0 ]; then
+    mopts="trans=tcp,port=$PORT,version=9p2000.L,aname=$ORIG,uname=root,access=client"
+  else
+    mopts="trans=tcp,port=$PORT,version=9p2000.L,aname=$ORIG,uname=$INVOKER_USER,access=$INVOKER_UID"
+  fi
+  [ -n "$MSIZE" ] && mopts="$mopts,msize=$MSIZE"
+  [ -n "$CACHE" ] && mopts="$mopts,cache=$CACHE"
+
+  log "mounting 9p at $MNT (-o $mopts)"
+  "${SUDO[@]}" mkdir -p "$MNT"
+  "${SUDO[@]}" mount -t 9p -o "$mopts" 127.0.0.1 "$MNT"
+  # The /proc/mounts line records the *effective* options -- diod caps
+  # msize at 64 KiB whatever the client asked for, and GOTCHAS.md wants
+  # settings as measured, not as requested.
+  grep -F " $MNT " /proc/mounts | sed 's/^/I: /' || true
+}
+
+# mount(2) returning is not the same as the export being usable; probe
+# with a real create + write + read-back, as the invoker when access= is
+# restricted to that uid (root is not exempt from v9fs access checks).
+wait_for_mount_usable() {
+  local probe="$MNT/.eval-under-ready.$$"
+  local as_user=()
+  if [ "$RUN_AS_ROOT" = 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+    as_user=(sudo -u "$INVOKER_USER")
+  fi
+  local waited=0 err=""
+  while [ "$waited" -lt 10 ]; do
+    if err=$("${as_user[@]}" dd if=/dev/urandom of="$probe" bs=4k count=1 2>&1) \
+      && err=$("${as_user[@]}" dd if="$probe" of=/dev/null bs=4k count=1 2>&1); then
+      "${as_user[@]}" rm -f "$probe" 2>/dev/null || true
+      log "mount is usable (after ${waited}s)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "ERROR: 9p mounted at $MNT but unusable after 10s" >&2
+  echo "       last probe error: $err" >&2
+  sed 's/^/  diod: /' "$DIOD_LOG" >&2 || true
+  "${SUDO[@]}" dmesg 2>/dev/null | grep -i 9p | tail -20 >&2 || true
+  exit 6
+}
+
+teardown() {
+  local rc=$?
+  set +e
+  if [ "$KEEP" = 1 ]; then
+    echo "I: --keep set; leaving diod (pid $DIOD_PID) + mount up (exit=$rc)"
+    echo "I: diod log: $DIOD_LOG"
+    return "$rc"
+  fi
+  log "teardown"
+  "${SUDO[@]}" umount "$MNT" 2>/dev/null || true
+  if [ -n "$DIOD_PID" ]; then
+    "${SUDO[@]}" kill "$DIOD_PID" 2>/dev/null || true
+  fi
+  "${SUDO[@]}" rm -rf "$MNT" "$ORIG" "$DIOD_LOG" 2>/dev/null || true
+  return "$rc"
+}
+trap teardown EXIT
+
+ensure_9p_installed
+start_diod
+mount_9p
+wait_for_mount_usable
+
+RUN_HOME="$HOME"
+if [ "$SET_HOME" = 1 ]; then
+  RUN_HOME="$MNT/home"
+  # mkdir as the invoker -- under access=<uid> a root mkdir would be
+  # rejected by the client, same shape as NFS root_squash.
+  if [ "$RUN_AS_ROOT" = 0 ] \
+     && [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+    sudo -u "$INVOKER_USER" mkdir -p "$RUN_HOME"
+  else
+    mkdir -p "$RUN_HOME"
+  fi
+fi
+
+# Drop back to the invoking user for the wrapped command (single-user
+# diod serves only that uid anyway); --run-as-root keeps privileges to
+# match its multi-user export. Mirrors eval-under-nfs.
+if [ "$RUN_AS_ROOT" = 0 ] \
+   && [ "$INVOKER_UID" != 0 ] && [ "$INVOKER_UID" != "$(id -u)" ]; then
+  log "running (as uid=$INVOKER_UID): $*"
+  sudo -u "$INVOKER_USER" -E \
+    env HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" \
+    "$@"
+else
+  log "running: $*"
+  HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" "$@"
+fi
