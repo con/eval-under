@@ -591,7 +591,9 @@ for p in ${COPY_OUT[@]+"${COPY_OUT[@]}"}; do
 done
 
 if [ "$rc" -eq 124 ] && [ "$VM_TIMEOUT" != 0 ]; then
-  echo "ERROR: guest exceeded --vm-timeout ${VM_TIMEOUT}s and was killed (boot or mount hang?)" >&2
+  echo "W: exit 124 -- either the wrapped command hit its own timeout inside the" >&2
+  echo "   guest (a dmesg tail above means the guest was alive to report it), or" >&2
+  echo "   the VM exceeded --vm-timeout ${VM_TIMEOUT}s and was killed from outside." >&2
 elif [ "$rc" -eq 255 ]; then
   echo "W: exit 255 -- either the wrapped command exited 255, or the guest died" >&2
   echo "   before reporting (vng's sentinel). Re-run with --debug-boot to see boot." >&2
