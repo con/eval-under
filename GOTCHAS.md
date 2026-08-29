@@ -265,6 +265,61 @@ layers on top, or in the syscalls the pjdfstest column is flagging.
 Pre-dates the matrix; ext4 is the control row, so this one *is* a real
 bug worth chasing rather than a filesystem property.
 
+### `9p * / git-annex test` -- hangs, on both servers identically
+
+The suite's very first group (`testremote type git`) fails `init`
+within seconds ("git-annex: Not initialized"), then the run goes
+silent inside `unavailable remote / removeKey` until the per-target
+timeout kills it (exit 124) ~40 minutes later. Identical on diod and
+on QEMU virtfs, so it is v9fs-client/protocol semantics rather than a
+server quirk -- and diod's own docs warn that distributed record
+locking "will deadlock", which is the pre-registered suspect. A hang
+*is* the finding: git-annex on a real vagrant 9p share stalls the same
+way. Not yet broken down further; the cell burns its full timeout by
+design (a runaway suite reports as `timeout`, not a bare cancellation).
+
+### `9p * / stress-ng` -- the unlinked-open-file class, server-dependent
+
+Both rows run all 20 stressors to a clean tally; the failures are
+`fstat`/`ftruncate` returning **ENOENT on files that are open but
+unlinked** (stress-ng's create-unlink-keep-fd pattern):
+
+- diod: failed `fallocate`, `hdd`, `copy-file` (17 passed);
+- QEMU virtfs: failed `copy-file`, `hdd` -- **`fallocate` passes**, a
+  clean server divergence worth keeping both rows for.
+
+On the QEMU row the guest kernel (pinned v6.8) also logs WARN traces
+in `v9fs_fid_lookup_with_uid -> v9fs_vfs_getattr_dotl` while these
+stressors run -- the client side of the same fid-on-unlinked-file gap,
+and part of why the guest kernel is pinned: this signature is
+kernel-version-specific.
+
+### `9p * / pjdfstest`
+
+Runs to completion on both rows (238 files, ~8800 assertions, ~3 min).
+On diod the divergence concentrates in: every `*/03.t` (the
+long-pathname scripts) across chown/ftruncate/link/mkdir/mkfifo/mknod/
+open/rmdir/symlink/truncate/unlink; `mkdir|mkfifo|mknod|open/00.t`
+assertions 25-27; the `open/06.t` flags matrix (62 of 144);
+`rename/10.t` (6 of 2099); `unlink/14.t` #4 (the same assertion the
+NFS row flags); `utimensat/08.t`. The QEMU-virtfs row's tally is in
+its `logs-*` artifact; per-assertion breakdown not yet done (same
+status as the BeeGFS rows).
+
+### `9p * / git testsuite`
+
+The full `t0*.sh t1*.sh` selection runs under prove on both rows and
+ends with totals; per-script `.out` files are in the artifacts (on the
+virtio row they travel out of the guest via the backend's
+`--copy-out`). Roll-up: diod 12 scripts / 194 failed assertions, QEMU
+virtfs 10 / 177. Shared failures include `t1517-outside-repo` (104)
+and `t0450-txt-doc-vs-help` (51) -- both green on the ext4 control
+row, so 9p-related, not yet run down. **`t1050-large` (15 failures)
+is diod-only** -- consistent with diod's 64 KiB msize cap and the
+unlinked-file gap above; it passes under QEMU virtfs. Several of the
+remaining entries are `# TODO known breakage` noise the dump's
+`not ok` count includes.
+
 ## Red that is not a finding
 
 Distinct from the cells above: these are harness races, and the fix is in
