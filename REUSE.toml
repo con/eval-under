@@ -12,6 +12,8 @@ path = [
     "*.md",
     "Vagrantfile",
     ".noannex",
+    ".gitignore",
+    ".codespellrc",
     ".claude/**",
     ".datalad/**",
     ".github/**",

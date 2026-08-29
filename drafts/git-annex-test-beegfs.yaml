@@ -1,4 +1,4 @@
-# DRAFT: standalone job to drop into datalad/git-annex/.github/workflows/
+# DRAFT: standalone job to drop into con/git-annex/.github/workflows/
 # as either a new file (test-beegfs.yaml) or a new job appended to
 # build-ubuntu.yaml alongside test-annex / test-annex-more.
 #
@@ -10,9 +10,9 @@
 # built .deb via download-artifact.
 #
 # When merging upstream:
-#   1. Copy this file to datalad/git-annex/.github/workflows/test-beegfs.yaml
+#   1. Copy this file to con/git-annex/.github/workflows/test-beegfs.yaml
 #      (or splice the `test-annex-beegfs:` job into build-ubuntu.yaml).
-#   2. Add eval_under_beegfs + beegfs/ dir to datalad/git-annex under
+#   2. Add eval_under_beegfs + beegfs/ dir to con/git-annex under
 #      .github/workflows/tools/  (mirroring the setup_crippledfs layout).
 #   3. Adjust the tools/ path in the `Run tests` step accordingly.
 

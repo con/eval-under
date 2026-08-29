@@ -267,7 +267,7 @@ setup_cifs() {
 
 [euprobe]
    path = $share
-   browseable = yes
+   browsable = yes
    read only = no
    guest ok = no
    force user = root

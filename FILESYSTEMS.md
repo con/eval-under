@@ -191,7 +191,7 @@ before the server question.
 **The server is a second wall.** Lustre's ldiskfs OSD needs a *patched*
 kernel; only the ZFS OSD runs on an unpatched one. So even with a
 working client, a single-node Lustre means a ZFS-backed MGS/MDT/OST --
-which is a documented configuration ([ZFS OSD][losd]), just not a small
+which is a documented configuration ([ZFS OSD][zfsosd]), just not a small
 one.
 
 **What does work, and is the recommended path:** Lustre's own test suite
@@ -228,7 +228,7 @@ sitting at a terminal. Promote to (1) only if the answer turns out to be
 interesting enough to want a badge for.
 
 [lpkg]: https://downloads.whamcloud.com/public/lustre/lustre-2.15.1/ubuntu2204/client/Packages
-[losd]: https://wiki.lustre.org/ZFS_OSD
+[zfsosd]: https://wiki.lustre.org/ZFS_OSD
 [ltest]: https://wiki.whamcloud.com/display/PUB/Testing+a+Lustre+filesystem
 [lvag]: https://wiki.lustre.org/Create_a_Virtual_HPC_Storage_Cluster_with_Vagrant
 [lvag2]: https://github.com/dtrudg/vagrant-lustre-tutorial
@@ -276,15 +276,21 @@ runner, which is the same conclusion arrived at three different ways.
 
 ### Promoting a candidate to a matrix row
 
-For anything the `loop` backend already handles, it is one line in
-`bin/ci/matrix.sh` plus a regeneration:
+For anything the `loop` backend already handles, it is a data edit in
+`.github/matrix.yaml` plus a regeneration:
+
+```yaml
+# under `backends:`, next to the existing loop rows:
+  - backend: loop
+    version: gfs2
+    label: Loop gfs2
+  - backend: loop
+    version: ocfs2
+    label: Loop ocfs2
+```
 
 ```bash
-# in EVAL_UNDER_BACKENDS, next to the existing loop rows:
-    "loop|gfs2|Loop gfs2"
-    "loop|ocfs2|Loop ocfs2"
-
-bin/ci/gen-dispatchers.sh          # writes the workflows + README table
+bin/ci/gen-readme-matrix.sh        # refreshes the README badge grid
 ```
 
 That is deliberately *not* done in this change: each row is four more
@@ -297,16 +303,20 @@ needs a `bin/eval-under-<name>` first. `bin/ci/probe-backend.sh` already
 contains a working bring-up sequence for each of them -- the `setup_*`
 function is the backend, minus the flag handling.
 
-### A cheaper fifth target
+### The cheap target
 
-Independent of any new row: `bin/ci/fs-capabilities.sh` would make a good
-fifth *target* alongside `git-annex`, `git`, `stress-ng` and `pjdfstest`.
-It runs in about a second, and it answers "what does this filesystem
-support?" for every backend in the matrix, including the ones where the
-full suite is too slow to run often. Where `pjdfstest` says which syscall
-violates POSIX, this says which of the four git-annex-specific mechanisms
-is present -- and it is the only one of the five that is cheap enough to
-run on every push to every backend.
+`bin/ci/fs-capabilities.sh` is now a target in its own right,
+`capabilities`, alongside `git-annex`, `git`, `stress-ng` and
+`pjdfstest`. It runs in about a second and answers "what does this
+filesystem support?" for any backend, including the ones where the full
+suite is too slow to run often. Where `pjdfstest` says which syscall
+violates POSIX, this says which of the git-annex-specific mechanisms is
+present.
+
+It is marked `on-demand: true` in `.github/matrix.yaml`, so it is
+runnable but is not a matrix cell -- it adds no badges and no weekly
+runs, and it is the default target of the reproduce workflow. Promoting
+it to a scheduled column later is a one-line data edit: drop the flag.
 
 ## Part 5 -- what this does not cover
 
