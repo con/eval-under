@@ -1,0 +1,112 @@
+name: Reproduce (on demand)
+
+# The support entry point: someone reports "X breaks on my $FILESYSTEM",
+# and you want a run of exactly that combination now -- without waiting
+# for the Monday schedule and without adding a matrix cell for a
+# filesystem we are not going to watch every week.
+#
+# Deliberately outside .github/matrix.yaml: no badge, no cron, no push
+# trigger. Every field is a dispatch input, including backends (sshfs)
+# and targets (capabilities) that have no scheduled cells at all.
+#
+# The job body mirrors test.yaml's, minus the matrix fan-out and the
+# status publishing -- a reproduction must never rewrite the status that
+# the README and the report page show for master.
+#
+# All non-trivial shell logic lives in bin/ci/*.sh. See .claude/CLAUDE.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "Filesystem to run under"
+        required: true
+        type: choice
+        default: sshfs
+        options: [sshfs, nfs, loop, beegfs]
+      backend-version:
+        description: >-
+          loop: filesystem (ext4, vfat, xfs, btrfs, gfs2, ocfs2, f2fs,
+          exfat, nilfs2, bcachefs). beegfs: point release (7.4.6, 8.1.0).
+          sshfs/nfs: leave as n/a.
+        required: true
+        type: string
+        default: "n/a"
+      target:
+        description: "What to run under it"
+        required: true
+        type: choice
+        default: capabilities
+        options: [capabilities, git-annex, git, stress-ng, pjdfstest]
+      backend-options:
+        description: >-
+          Extra backend flags, e.g. "--no-cache --workaround rename"
+          (sshfs) or "--sync" (nfs). Run `bin/eval-under BACKEND --help`
+          for the list.
+        required: false
+        type: string
+        default: ""
+      runner:
+        description: "Runner image (beegfs requires ubuntu-22.04)"
+        required: true
+        type: choice
+        default: ubuntu-24.04
+        options: [ubuntu-24.04, ubuntu-22.04]
+
+# Named for the combination, so two people reproducing two different
+# reports do not cancel each other.
+concurrency:
+  group: >-
+    reproduce-${{ inputs.backend }}-${{ inputs.backend-version }}-${{ inputs.target }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reproduce:
+    name: ${{ inputs.target }} under ${{ inputs.backend }} ${{ inputs.backend-version }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read  # to download artifacts from con/git-annex
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install backend client dependencies
+        run: bin/ci/install-backend.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
+
+      - name: Install target ${{ inputs.target }}
+        run: bin/ci/install-target.sh "${{ inputs.target }}"
+
+      - name: Fetch latest git-annex daily build from con/git-annex
+        if: inputs.target == 'git-annex'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bin/ci/install-git-annex-daily.sh
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email test@github.land
+          git config --global user.name  "GitHub Almighty"
+
+      - name: Run ${{ inputs.target }} under ${{ inputs.backend }}
+        env:
+          EVAL_UNDER_BACKEND_OPTS: ${{ inputs.backend-options }}
+        run: >-
+          sudo -E bin/ci/run-under.sh
+          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
+
+      - name: Dump failure logs
+        if: failure()
+        run: >-
+          bin/ci/dump-failure-logs.sh
+          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduce-logs-${{ inputs.backend }}-${{ inputs.target }}-${{ github.run_id }}
+          path: |
+            /var/log/beegfs-*
+            /opt/eval-under-src/git/t/test-results/**
+          if-no-files-found: ignore

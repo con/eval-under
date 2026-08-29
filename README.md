@@ -14,6 +14,11 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 `bin/eval-under-<name>` scripts, new suites as `bin/ci/target-<name>.sh`
 (see below).
 
+> **Which filesystem should be next?** [FILESYSTEMS.md](FILESYSTEMS.md)
+> surveys the filesystems with documented git-annex / DataLad breakage
+> against what can actually be stood up in CI -- the second half
+> measured, not guessed, by the *Probe candidate filesystems* workflow.
+>
 > **Read [GOTCHAS.md](GOTCHAS.md) before drawing conclusions from a red
 > cell.** It records the exact mkfs / mount / export settings each
 > backend uses -- results only mean something relative to those -- and
@@ -145,6 +150,14 @@ sudo bin/eval-under loop --fs xfs --size 200 --set-home -- \
 # the fsync-heavy slow path)
 sudo bin/eval-under nfs --set-home -- bash -c 'cd "$HOME" && git annex test'
 
+# Under sshfs, with the attribute cache off
+sudo bin/eval-under sshfs --no-cache --set-home -- \
+  bash -c 'cd "$HOME" && git annex test'
+
+# ...or against the reporter's own server, with their mount options
+sudo bin/eval-under sshfs --host store.example.org --remote-dir /data/scratch \
+  --workaround rename --set-home -- git annex fsck
+
 # Skip teardown to poke around after a failure
 sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 
@@ -157,6 +170,40 @@ All backends accept `--mount-point`, `--set-home`, `--keep`, and their
 own backend-specific options. See `bin/eval-under BACKEND --help` for
 the full flag / env-var / default table per backend.
 
+## Reproducing a report
+
+The scheduled matrix answers "is this filesystem broken?" for the five
+backends it covers. Support needs the other question answered: someone
+reports a problem on a filesystem, possibly one with no cell, and you
+want that combination running now with *their* mount options.
+
+Start with the capability profile -- seconds, and it usually explains
+the failure before a suite is worth starting:
+
+```bash
+sudo bin/eval-under sshfs --set-home -- bin/ci/fs-capabilities.sh
+```
+
+Every line it prints maps to a class of reported bug (`sqlite-wal=no` ->
+"SQLite3 returned ErrorIO"; `fcntl-lock=no` -> git-annex falls back to
+`annex.pidlock`; `symlink=no` -> crippled filesystem, adjusted branch).
+See FILESYSTEMS.md for which report each one came from.
+
+Then run the suite under the same backend:
+
+```bash
+sudo bin/ci/run-under.sh sshfs n/a git-annex
+```
+
+In CI, the **Reproduce (on demand)** workflow is the same thing from the
+Actions tab: pick the backend, version, target, runner image, and any
+backend flags (`--no-cache --workaround rename`, `--sync`, ...). It has
+no badge and no schedule -- it exists to be run at someone, once.
+
+Targets available there include `capabilities`, which is not a matrix
+column: it is the fast triage step above, wrapped so it can run under
+any backend.
+
 ## File layout
 
 | Path                                     | Purpose                                                                            |
@@ -165,6 +212,7 @@ the full flag / env-var / default table per backend.
 | `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                                   |
 | `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
 | `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
+| `bin/eval-under-sshfs`                   | sshfs backend (throwaway loopback sshd, or a remote you name)                      |
 | `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
@@ -180,6 +228,11 @@ the full flag / env-var / default table per backend.
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
 | `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
 | `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
+| `.github/workflows/reproduce.yaml`       | On-demand run of any backend x target, for support (no badge, no schedule)         |
+| `FILESYSTEMS.md`                         | Survey: reported git-annex / DataLad breakage vs. what can be bootstrapped here    |
+| `bin/ci/probe-backend.sh`                | Reconnaissance: try to stand up a candidate filesystem here, report what it got    |
+| `bin/ci/fs-capabilities.sh`              | What a mounted filesystem supports, in the dimensions git-annex trips over         |
+| `.github/workflows/probe-filesystems.yaml` | Runs those probes; a roll-up job renders the whole table                         |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)

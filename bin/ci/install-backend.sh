@@ -9,17 +9,18 @@
 # usage:
 #   bin/ci/install-backend.sh <backend> <version>
 #
-#   backend  = beegfs | nfs | loop
+#   backend  = beegfs | nfs | loop | sshfs
 #   version  = for beegfs: point release (e.g. 7.4.6, 8.1.0)
 #              for loop:   filesystem type (e.g. vfat, ext4, xfs, btrfs)
 #              for nfs:    literal "n/a"
+#              for sshfs:  literal "n/a"
 #
 # Idempotent enough for CI re-runs; not a full package manager.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-BACKEND="${1:?backend required (beegfs|nfs|loop)}"
+BACKEND="${1:?backend required (beegfs|nfs|loop|sshfs)}"
 VERSION="${2:?version required (BeeGFS version | loop fs name | 'n/a' for nfs)}"
 
 # Give unattended-upgrades a moment on ubuntu-22.04 runners rather than
@@ -72,6 +73,18 @@ install_nfs() {
     command -v exportfs
 }
 
+install_sshfs() {
+    apt_update
+    # openssh-sftp-server is what actually serves the mount; on Ubuntu it
+    # is pulled in by openssh-server, but name it so a slimmer image
+    # cannot leave us without an sftp-server binary.
+    apt_install sshfs openssh-server openssh-sftp-server
+    command -v sshfs
+    # The backend starts its own sshd, so the system one need not run --
+    # but its privilege-separation directory must exist.
+    sudo mkdir -p /run/sshd
+}
+
 install_loop() {
     local pkg
     case "$VERSION" in
@@ -79,16 +92,36 @@ install_loop() {
         xfs)                pkg=xfsprogs ;;
         btrfs)              pkg=btrfs-progs ;;
         ext2|ext3|ext4)     pkg=e2fsprogs ;;  # usually preinstalled
+        gfs2)               pkg=gfs2-utils ;;
+        ocfs2)              pkg=ocfs2-tools ;;
+        f2fs)               pkg=f2fs-tools ;;
+        exfat)              pkg=exfatprogs ;;
+        nilfs2)             pkg=nilfs-tools ;;
+        bcachefs)           pkg=bcachefs-tools ;;
         *) echo "unknown loop filesystem: $VERSION" >&2; exit 1 ;;
     esac
     apt_update
     apt_install "$pkg"
     command -v "mkfs.$VERSION"
+
+    # gfs2 and ocfs2 ship in linux-modules-extra rather than the base
+    # kernel package. It is present on GitHub-hosted runners, but say so
+    # out loud here rather than discovering it as an "unknown filesystem
+    # type" at mount time.
+    case "$VERSION" in
+        gfs2|ocfs2)
+            if ! sudo modprobe "$VERSION"; then
+                apt_install "linux-modules-extra-$(uname -r)"
+                sudo modprobe "$VERSION"
+            fi
+            ;;
+    esac
 }
 
 case "$BACKEND" in
     beegfs) install_beegfs ;;
     nfs)    install_nfs ;;
     loop)   install_loop ;;
-    *) echo "unknown backend: $BACKEND (expected beegfs|nfs|loop)" >&2; exit 1 ;;
+    sshfs)  install_sshfs ;;
+    *) echo "unknown backend: $BACKEND (expected beegfs|nfs|loop|sshfs)" >&2; exit 1 ;;
 esac

@@ -46,11 +46,22 @@ backends = d["backends"]
 if not targets or not backends:
     sys.exit("matrix.yaml: empty targets or backends")
 
+# A target flagged `on-demand: true` is runnable but is not a matrix
+# cell: it exists for reproduction (.github/workflows/reproduce.yaml),
+# not for a scheduled badge. Splitting the list here is what keeps
+# matrix-json.sh -- which iterates EVAL_UNDER_TARGETS -- from generating
+# cells for it, without every consumer needing to know about the flag.
+scheduled = [t for t in targets if not t.get("on-demand")]
+ondemand = [t for t in targets if t.get("on-demand")]
+if not scheduled:
+    sys.exit("matrix.yaml: every target is on-demand; no cells to run")
+
 def q(v):
     return shlex.quote(str(v))
 
 out = []
-out.append("EVAL_UNDER_TARGETS=(%s)" % " ".join(q(t["name"]) for t in targets))
+out.append("EVAL_UNDER_TARGETS=(%s)" % " ".join(q(t["name"]) for t in scheduled))
+out.append("EVAL_UNDER_ONDEMAND_TARGETS=(%s)" % " ".join(q(t["name"]) for t in ondemand))
 out.append("EVAL_UNDER_BACKENDS=(%s)" % " ".join(
     q("%s|%s|%s" % (b["backend"], b["version"], b["label"])) for b in backends))
 
@@ -111,9 +122,12 @@ cell_slug() {
     echo "$(backend_slug "$backend" "$version")-$target"
 }
 
+# True for anything runnable, scheduled or on-demand. Callers that must
+# enumerate *cells* (matrix-json.sh, gen-readme-matrix.sh) iterate
+# EVAL_UNDER_TARGETS instead, which holds the scheduled ones only.
 target_known() {
     local t
-    for t in "${EVAL_UNDER_TARGETS[@]}"; do
+    for t in "${EVAL_UNDER_TARGETS[@]}" "${EVAL_UNDER_ONDEMAND_TARGETS[@]}"; do
         [ "$t" = "$1" ] && return 0
     done
     return 1

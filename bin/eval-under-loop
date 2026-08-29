@@ -26,6 +26,9 @@ SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 # new name is unset.
 FS="${EVAL_UNDER_LOOP_FS:-${DATALAD_TESTS_TEMP_FS:-vfat}}"
 SIZE_MB="${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-100}}"
+MKFS_OPTS="${EVAL_UNDER_LOOP_MKFS_OPTS-}"
+MKFS_OPTS_EXPLICIT=0
+[ -n "${EVAL_UNDER_LOOP_MKFS_OPTS+x}" ] && MKFS_OPTS_EXPLICIT=1
 
 usage() {
   cat <<'EOF'
@@ -37,7 +40,16 @@ dd'd, mkfs.<fs>'d, and loop-mounted for the duration of the command.
 
 Requires `mkfs.<fs>` for the chosen filesystem. For the default
 (`vfat`) that means `dosfstools`. Also common: `xfsprogs` (xfs),
-`e2fsprogs` (ext4, usually preinstalled), `btrfs-progs` (btrfs).
+`e2fsprogs` (ext4, usually preinstalled), `btrfs-progs` (btrfs),
+`gfs2-utils` (gfs2), `ocfs2-tools` (ocfs2), `f2fs-tools` (f2fs),
+`exfatprogs` (exfat), `nilfs-tools` (nilfs2).
+
+GFS2 and OCFS2 are cluster filesystems, and this backend uses each
+one's *single-node* locking mode -- `-p lock_nolock` for GFS2,
+`-M local` for OCFS2 -- so neither needs corosync, dlm or pacemaker.
+Both vendors document that mode as development/test-only, which is
+exactly what this is. What it buys: cluster-filesystem locking and
+rename semantics, without a cluster.
 
 Options (flag / env var / default / purpose):
 
@@ -52,11 +64,20 @@ Options (flag / env var / default / purpose):
 
   --fs TYPE            EVAL_UNDER_LOOP_FS             vfat
       Filesystem to create on the backing image. Anything with a
-      matching `mkfs.<type>` works: vfat, ext4, xfs, btrfs, ...
+      matching `mkfs.<type>` works: vfat, ext4, xfs, btrfs, gfs2,
+      ocfs2, f2fs, exfat, nilfs2, ...
 
   --size MB            EVAL_UNDER_LOOP_SIZE_MB        100
       Backing image size in megabytes. Bumped from datalad's original
-      10 -- git-annex's testsuite fills that in a few seconds.
+      10 -- git-annex's testsuite fills that in a few seconds. Raised
+      to the filesystem's own minimum when it is larger: gfs2 and
+      ocfs2 reserve journal space and cannot live in 100MB. The bump
+      is logged, never silent.
+
+  --mkfs-opts "..."    EVAL_UNDER_LOOP_MKFS_OPTS      per-fs default
+      Override the mkfs argument list. The defaults exist to make
+      cluster filesystems work single-node; setting this replaces
+      them wholesale, so include the locking flags yourself.
 
   -h, --help
       Print this help.
@@ -85,6 +106,7 @@ while [ $# -gt 0 ]; do
     --set-home) SET_HOME=1; shift ;;
     --fs) FS="$2"; shift 2 ;;
     --size) SIZE_MB="$2"; shift 2 ;;
+    --mkfs-opts) MKFS_OPTS="$2"; MKFS_OPTS_EXPLICIT=1; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
@@ -112,6 +134,38 @@ fi
 
 log() { printf '\nI: %s\n' "$*"; }
 
+# mkfs arguments a filesystem needs before it will make a usable
+# single-node image. Empty means "distro defaults", which is the
+# deliberate choice for everything the matrix already covers (see
+# GOTCHAS.md: we measure what a user gets from a plain mkfs).
+default_mkfs_opts() {
+  case "$1" in
+    # lock_nolock: the single-node lock module, so no dlm/corosync is
+    # needed. -j 1: one journal, since one node mounts it. -J 8: 8MB,
+    # the minimum journal, because the 128MB default does not fit in a
+    # test-sized image. -O: do not prompt.
+    gfs2)  echo "-O -p lock_nolock -j 1 -J 8" ;;
+    # -M local: local (non-clustered) mount, so no o2cb stack. -N 1: one
+    # node slot. --fs-features=local drops the clustered feature bits.
+    ocfs2) echo "-F -M local -N 1 -b 4K -C 8K --fs-features=local -q" ;;
+    f2fs)  echo "-f" ;;
+    nilfs2) echo "-f" ;;
+    ntfs)  echo "-F -Q" ;;
+    *)     echo "" ;;
+  esac
+}
+
+# Smallest image a filesystem will accept, in MB. Below these, mkfs
+# either refuses outright or produces something that cannot be mounted.
+min_size_mb() {
+  case "$1" in
+    gfs2)  echo 256 ;;
+    ocfs2) echo 256 ;;
+    btrfs) echo 120 ;;
+    *)     echo 0 ;;
+  esac
+}
+
 ensure_mkfs_installed() {
   if command -v "mkfs.$FS" >/dev/null 2>&1; then return 0; fi
   echo "ERROR: mkfs.$FS not found in PATH." >&2
@@ -119,6 +173,11 @@ ensure_mkfs_installed() {
     vfat)   echo "  Install with: apt install dosfstools" >&2 ;;
     xfs)    echo "  Install with: apt install xfsprogs" >&2 ;;
     btrfs)  echo "  Install with: apt install btrfs-progs" >&2 ;;
+    gfs2)   echo "  Install with: apt install gfs2-utils" >&2 ;;
+    ocfs2)  echo "  Install with: apt install ocfs2-tools" >&2 ;;
+    f2fs)   echo "  Install with: apt install f2fs-tools" >&2 ;;
+    exfat)  echo "  Install with: apt install exfatprogs" >&2 ;;
+    nilfs2) echo "  Install with: apt install nilfs-tools" >&2 ;;
     ext2|ext3|ext4) echo "  Install with: apt install e2fsprogs" >&2 ;;
     *) echo "  Install the package that provides mkfs.$FS." >&2 ;;
   esac
@@ -130,6 +189,17 @@ IMAGE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-loop-XXXXX").img"
 LOOP=""
 
 start_loop() {
+  # Raise, never refuse. Callers pass a size chosen for the *target*
+  # (bin/ci/run-under.sh always passes one), and no caller knows every
+  # filesystem's journal overhead. A harness that cannot make a 100MB
+  # gfs2 should make the smallest gfs2 that works and say so, not stop.
+  local floor
+  floor="$(min_size_mb "$FS")"
+  if [ "$SIZE_MB" -lt "$floor" ]; then
+    log "raising image size ${SIZE_MB}MB -> ${floor}MB ($FS minimum)"
+    SIZE_MB="$floor"
+  fi
+
   log "creating ${SIZE_MB}MB backing image $IMAGE"
   # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
   # used bs=1032192 which is a slightly-off historical vfat-cluster
@@ -140,8 +210,10 @@ start_loop() {
   LOOP=$("${SUDO[@]}" losetup --find --show "$IMAGE")
   echo "I: loop device: $LOOP"
 
-  log "mkfs.$FS $LOOP"
-  "${SUDO[@]}" "mkfs.$FS" "$LOOP" >/dev/null
+  [ "$MKFS_OPTS_EXPLICIT" = 1 ] || MKFS_OPTS="$(default_mkfs_opts "$FS")"
+  log "mkfs.$FS $MKFS_OPTS $LOOP"
+  # shellcheck disable=SC2086  # MKFS_OPTS is a deliberate word list
+  "${SUDO[@]}" "mkfs.$FS" $MKFS_OPTS "$LOOP" >/dev/null
 }
 
 mount_loop() {
@@ -153,6 +225,13 @@ mount_loop() {
   case "$FS" in
     vfat|msdos|exfat|ntfs)
       "${SUDO[@]}" mount -o "uid=$INVOKER_UID,gid=$INVOKER_GID" "$LOOP" "$MNT"
+      ;;
+    gfs2)
+      # Named again at mount time: mkfs records it, but saying it here
+      # keeps the mount working against an image made with a -t
+      # cluster:name label by someone else.
+      "${SUDO[@]}" mount -t gfs2 -o lockproto=lock_nolock "$LOOP" "$MNT"
+      "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
       ;;
     *)
       "${SUDO[@]}" mount "$LOOP" "$MNT"

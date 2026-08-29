@@ -54,6 +54,9 @@ refs:
 #                  pjdfstest is half privileged-vs-unprivileged
 #                  assertions and refuses to run otherwise; stress-ng's
 #                  chown/mknod stressors need CAP_CHOWN / CAP_MKNOD.
+#   on-demand      runnable, but NOT a matrix cell: no badge, no cron.
+#                  For reproducing a report against a filesystem we do
+#                  not schedule (.github/workflows/reproduce.yaml).
 targets:
   - name: git-annex
     label: git-annex test
@@ -87,6 +90,20 @@ targets:
     loop-size-mb: 256
     needs-root: true
     needs-git-annex: false
+
+  # bin/ci/fs-capabilities.sh under the backend: what does this
+  # filesystem actually support? Seconds rather than minutes, and it
+  # usually explains a suite result before the suite is worth starting
+  # -- which is why it is the default target of the reproduce workflow.
+  # Tens of syscalls: if it has not finished in 5 minutes, the
+  # filesystem is hanging, and that is itself the answer.
+  - name: capabilities
+    label: capability profile
+    timeout: 300
+    loop-size-mb: 100
+    needs-root: false
+    needs-git-annex: false
+    on-demand: true
 
 # Row order of the README CI matrix. `version` is the literal "n/a" for
 # backends with nothing to pin (see bin/ci/install-backend.sh).

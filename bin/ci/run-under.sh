@@ -13,16 +13,20 @@
 # usage:
 #   bin/ci/run-under.sh <backend> <version> [target]
 #
-#   backend = beegfs | nfs | loop
+#   backend = beegfs | nfs | loop | sshfs
 #   version = for beegfs: point release (e.g. 7.4.6, 8.1.0)
 #             for loop:   filesystem type (e.g. vfat, ext4)
 #             for nfs:    literal "n/a"
+#             for sshfs:  literal "n/a"
 #   target  = git-annex (default) | git | stress-ng | pjdfstest
 #
 # env overrides:
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
 #   EVAL_UNDER_LOOP_SIZE_MB    loop backing image size
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built the suites
+#   EVAL_UNDER_BACKEND_OPTS    extra backend flags, word-split (e.g.
+#                              "--no-cache --workaround rename"). Used by
+#                              the on-demand reproduce workflow.
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -59,8 +63,16 @@ case "$BACKEND" in
             # need an export that does not squash root, and need to keep
             # their privileges rather than being dropped to the invoker.
             target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
+    sshfs)  opts=() ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# Caller-supplied backend flags, deliberately word-split: this is how the
+# reproduce workflow passes a reporter's exact mount options through.
+if [ -n "${EVAL_UNDER_BACKEND_OPTS:-}" ]; then
+    # shellcheck disable=SC2206  # word-splitting is the point
+    opts+=(${EVAL_UNDER_BACKEND_OPTS})
+fi
 
 runner="$here/target-$TARGET.sh"
 [ -x "$runner" ] || { echo "no target runner at $runner" >&2; exit 1; }
