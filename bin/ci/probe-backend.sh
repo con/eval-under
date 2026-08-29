@@ -472,7 +472,16 @@ fi
 echo "SUMMARY|$CANDIDATE|$verdict|${elapsed}s|${NOTE:--}|$(echo "$caps" \
     | grep -E '^[a-z0-9-]+=' | tr '\n' ' ')"
 
-# PARTIAL is a finding, not a failure: the job stays green so the
-# summary is what gets read, not the red X.
-[ "$rc" = 1 ] && exit 1
+# Every verdict is a finding, including "NOT BOOTSTRAPPABLE" -- that is
+# the answer to the question this script asks, not a broken build. So we
+# exit 0 once a verdict has been recorded, and let the roll-up table say
+# what happened.
+#
+# The alternative was tried and is worse: with lustre, openafs, cephfs
+# and ecryptfs permanently unbootstrappable on a hosted runner, exiting
+# non-zero pins four red checks to every pull request that touches
+# bin/, and "are this PR's checks green?" stops having an answer.
+#
+# Genuine script errors (no candidate given, unknown candidate, an
+# unusable probe dir) still exit non-zero -- they return before here.
 exit 0

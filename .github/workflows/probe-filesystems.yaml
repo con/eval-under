@@ -6,14 +6,20 @@ name: Probe candidate filesystems
 # answers "is a bin/eval-under-<name> backend even possible here?"
 # before anyone writes one.
 #
-# A red cell here means "could not be brought up on this runner", which
-# is a finding. Read the job summary, not just the check mark.
+# Every candidate reports a verdict and the job stays green: "could not
+# be brought up on this runner" is the answer to the question, not a
+# failure. Read the roll-up table in the run summary -- the check mark
+# only tells you the probe itself ran.
 #
 # All logic lives in bin/ci/probe-backend.sh -- see .claude/CLAUDE.md.
 
+# Reconnaissance is ~25 jobs, so it does not run on every branch push.
+# Dispatch it when you want an answer; master re-runs it when the probe
+# itself changes, to catch bit-rot in the bring-up recipes.
 on:
   workflow_dispatch:
   push:
+    branches: [master]
     paths:
       - "bin/ci/probe-backend.sh"
       - "bin/ci/fs-capabilities.sh"
