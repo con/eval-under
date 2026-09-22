@@ -11,10 +11,38 @@
 #   eval-under --list
 #   eval-under --help
 #   eval-under BACKEND --help
+#   eval-under --version
 
 set -eu
 
 here="$(cd "$(dirname "$0")" && pwd)"
+
+# Version reported when this script is NOT running out of its own git
+# checkout (installed copy, release tarball, distribution package).
+# Bump this together with the release tag.
+VERSION_FALLBACK="0.1.0"
+
+version() {
+  local top
+  # Derive the version from the checkout this script lives in:
+  #   0.1.0             on a release tag
+  #   0.1.0-4-g1a2b3c4  four commits past it
+  #   1a2b3c4           no tag in this commit's history
+  #   <any>-dirty       uncommitted changes in the checkout
+  # --tags so lightweight tags count too, not just annotated ones.
+  #
+  # The $top/bin test is what distinguishes "running from a source
+  # checkout" from "installed copy that happens to sit inside some other
+  # repo". No git, no repo, or a repo git refuses (`safe.directory`) all
+  # fail quietly and fall through to the baked-in value. --no-optional-
+  # locks so --dirty cannot leave a refreshed .git/index behind.
+  if top="$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)" \
+     && [ "$here" -ef "$top/bin" ]; then
+    git --no-optional-locks -C "$here" describe --tags --always --dirty \
+      2>/dev/null && return 0
+  fi
+  echo "$VERSION_FALLBACK"
+}
 
 list_backends() {
   # Any executable in $here named eval-under-<something>.
@@ -32,6 +60,7 @@ Usage: eval-under BACKEND [BACKEND_OPTIONS...] -- CMD [ARGS...]
        eval-under --list
        eval-under --help
        eval-under BACKEND --help
+       eval-under --version
 
 Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
 pointing at a temporarily-mounted filesystem, selected by BACKEND.
@@ -72,6 +101,10 @@ case "$1" in
     ;;
   --list)
     list_backends
+    exit 0
+    ;;
+  -V|--version)
+    echo "eval-under $(version)"
     exit 0
     ;;
   --*)

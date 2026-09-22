@@ -151,11 +151,20 @@ sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 # Discover backends / read backend help
 bin/eval-under --list
 bin/eval-under nfs --help
+
+# Version
+bin/eval-under --version        # -> eval-under 0.1.0
 ```
 
 All backends accept `--mount-point`, `--set-home`, `--keep`, and their
 own backend-specific options. See `bin/eval-under BACKEND --help` for
 the full flag / env-var / default table per backend.
+
+`--version` (`-V`) reports `git describe --tags --always --dirty` when
+run from a checkout -- so `0.1.0` on a release tag, `0.1.0-4-g1a2b3c4`
+four commits past it, and a `-dirty` suffix for uncommitted changes. An
+installed copy outside a checkout reports the `VERSION_FALLBACK` baked
+into `bin/eval-under`, bumped with each release tag.
 
 ## File layout
 
