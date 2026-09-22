@@ -157,6 +157,20 @@ All backends accept `--mount-point`, `--set-home`, `--keep`, and their
 own backend-specific options. See `bin/eval-under BACKEND --help` for
 the full flag / env-var / default table per backend.
 
+Without `--mount-point` (or `EVAL_UNDER_MOUNT`), a backend mounts on a
+fresh per-run directory under `$TMPDIR` (`/tmp` if unset), next to the
+backing state it creates there -- not on a fixed `/mnt/<backend>`:
+
+```text
+~/.tmp/eval-under-nfs-B3UXj.orig    exported backing dir
+~/.tmp/eval-under-nfs-B3UXj.nfs     the mount TMPDIR points at
+```
+
+So concurrent runs don't collide, nothing has to pre-exist under `/mnt`,
+and a leftover mount from `--keep` says which run left it. An explicit
+`--mount-point` still pins the mount wherever you want it; a directory
+that was already there is only unmounted on teardown, never removed.
+
 ## File layout
 
 | Path                                     | Purpose                                                                            |
@@ -226,7 +240,10 @@ filesystem testing.
 2. Follow the pattern: `set -eu`, `${SUDO[@]}` arrays for root, `trap
    teardown EXIT`, a here-doc'd `usage()`, `EVAL_UNDER_<BACKEND>_*` env
    vars for backend-specific options, and the common
-   `--mount-point` / `--set-home` / `--keep` flags on top.
+   `--mount-point` / `--set-home` / `--keep` flags on top. Default the
+   mountpoint to `$MNT_BASE.<backend>`, derived from one
+   `mktemp -u "${TMPDIR:-/tmp}/eval-under-<backend>-XXXXX"` base shared
+   with the backend's backing state -- never a fixed `/mnt/<backend>`.
 3. At the end, run the wrapped command with `TMPDIR`,
    `DATALAD_TESTS_TEMP_DIR`, and (if `--set-home`) `HOME` pointing at
    the mount.
