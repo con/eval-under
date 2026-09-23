@@ -153,7 +153,7 @@ bin/eval-under --list
 bin/eval-under nfs --help
 
 # Version
-bin/eval-under --version        # -> eval-under 0.1.0
+bin/eval-under --version        # -> eval-under 0.1.0-4-g1a2b3c4
 ```
 
 All backends accept `--mount-point`, `--set-home`, `--keep`, and their
