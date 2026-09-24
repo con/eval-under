@@ -18,7 +18,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(cd "$here/.." && pwd)"
 
 # Defaults (options override; env vars override defaults).
-MNT="${EVAL_UNDER_MOUNT:-/mnt/beegfs}"
+# Empty MNT means "derive a per-run mountpoint under $TMPDIR" (see the
+# MNT_BASE block below); only an explicit --mount-point /
+# EVAL_UNDER_MOUNT pins the mount to a fixed path.
+MNT="${EVAL_UNDER_MOUNT:-}"
 DATA_ROOT="${EVAL_UNDER_BEEGFS_DATA_ROOT:-/beegfs}"
 VERSION="${EVAL_UNDER_BEEGFS_VERSION:-7.4.6}"
 STARTUP_WAIT="${EVAL_UNDER_BEEGFS_STARTUP_WAIT:-60}"
@@ -40,8 +43,15 @@ pointing at a BeeGFS mount, backed by a containerised BeeGFS cluster
 
 Options (flag / env var / default / purpose):
 
-  --mount-point PATH   EVAL_UNDER_MOUNT               /mnt/beegfs
-      Where to mount BeeGFS on the host.
+  --mount-point PATH   EVAL_UNDER_MOUNT               (per-run tmp dir)
+      Where to mount BeeGFS on the host. Default: a fresh per-run
+      directory under $TMPDIR (/tmp if unset), e.g. with TMPDIR=~/.tmp:
+
+        ~/.tmp/eval-under-beegfs-B3UXj.beegfs
+
+      The former fixed default (/mnt/beegfs) collided between concurrent
+      runs, needed root just to create the directory, and hid which run
+      owned the mount. Pass this option when a stable path is wanted.
 
   --set-home           EVAL_UNDER_HOME_ON_MOUNT       (unset)
       Also set HOME=<mount>/home for the wrapped command. Catches the
@@ -58,6 +68,10 @@ Options (flag / env var / default / purpose):
 
   --data-root PATH     EVAL_UNDER_BEEGFS_DATA_ROOT    /beegfs
       Host dir for container-side target dirs (mgmtd + meta + storage).
+      Unlike the mountpoint this stays a fixed path by default: it is
+      bind-mounted into the containers and has to sit on a local
+      filesystem with working extended attributes, which $TMPDIR (tmpfs
+      on plenty of systems) is not guaranteed to be.
 
   --startup-wait S     EVAL_UNDER_BEEGFS_STARTUP_WAIT 60
       Seconds to wait for mgmtd(8008) + meta(8005) + storage(8003) to
@@ -109,6 +123,15 @@ COMPOSE="$repo_root/fixtures/beegfs/docker-compose-v${MAJOR}.yml"
 }
 CONF_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-client.conf.template"
 HELPERD_TEMPLATE="$repo_root/fixtures/beegfs/beegfs-helperd.conf.template"
+
+# Per-run mountpoint under $TMPDIR, mirroring the other backends (see
+# --mount-point in usage()). mktemp -u only reserves the name; the dir
+# itself is created by mount_beegfs().
+MNT_BASE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-beegfs-XXXXX")"
+MNT="${MNT:-$MNT_BASE.beegfs}"
+
+# Whether teardown created the mountpoint and may therefore remove it.
+MNT_CREATED=0
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || {
@@ -245,6 +268,7 @@ wait_for_mount_usable() {
 
 mount_beegfs() {
   log "mounting BeeGFS at $MNT"
+  [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
   "${SUDO[@]}" mount -t beegfs beegfs_nodev "$MNT" -o "cfgFile=$CONF_ACTIVE"
   wait_for_mount_usable
@@ -266,6 +290,11 @@ teardown() {
   fi
   BEEGFS_DATA_ROOT="$DATA_ROOT" \
     "${SUDO_E[@]}" docker compose -f "$COMPOSE" down -v 2>/dev/null || true
+  # Only remove the mountpoint if this run made it: an explicit
+  # --mount-point may well be a directory that predates us.
+  if [ "$MNT_CREATED" = 1 ]; then
+    "${SUDO[@]}" rm -rf "$MNT" 2>/dev/null || true
+  fi
   "${SUDO[@]}" rm -rf "$DATA_ROOT" "$CONF_ACTIVE" "$HELPERD_ACTIVE"
   return "$rc"
 }

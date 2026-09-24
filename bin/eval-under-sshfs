@@ -23,7 +23,10 @@
 
 set -eu
 
-MNT="${EVAL_UNDER_MOUNT:-/mnt/sshfs}"
+# Empty MNT means "derive a per-run mountpoint next to the scratch dir"
+# (see the MNT_BASE block below); only an explicit --mount-point /
+# EVAL_UNDER_MOUNT pins the mount to a fixed path.
+MNT="${EVAL_UNDER_MOUNT:-}"
 KEEP="${EVAL_UNDER_KEEP:-0}"
 SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 
@@ -60,8 +63,17 @@ Install with: apt install sshfs openssh-server
 
 Options (flag / env var / default / purpose):
 
-  --mount-point PATH   EVAL_UNDER_MOUNT              /mnt/sshfs
-      Where to mount sshfs on the host.
+  --mount-point PATH   EVAL_UNDER_MOUNT              (next to scratch dir)
+      Where to mount sshfs on the host. Default: a fresh per-run
+      directory next to this run's scratch dir, both under $TMPDIR
+      (/tmp if unset) -- e.g. with TMPDIR=~/.tmp:
+
+        ~/.tmp/eval-under-sshfs-B3UXj.scratch  keys, sshd conf, backing
+        ~/.tmp/eval-under-sshfs-B3UXj.sshfs    where this run mounts it
+
+      A fixed default would collide between concurrent runs and hide
+      which run owned the mount. Pass this option when a stable path is
+      wanted.
 
   --set-home           EVAL_UNDER_HOME_ON_MOUNT      (unset)
       Also set HOME=<mount>/home for the wrapped command.
@@ -188,9 +200,23 @@ command -v sshfs >/dev/null 2>&1 || {
   exit 3
 }
 
-SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/eval-under-sshfs-XXXXX")"
+# The scratch dir (throwaway host key, sshd config, authorized_keys and
+# the backing directory that gets re-exported) and the mountpoint derive
+# from one mktemp -u base, so a run leaves a self-describing pair of
+# siblings under $TMPDIR -- the convention every backend here follows
+# (see "Adding a new backend" in the README).
+MNT_BASE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-sshfs-XXXXX")"
+SCRATCH="$MNT_BASE.scratch"
+MNT="${MNT:-$MNT_BASE.sshfs}"
+mkdir -p "$SCRATCH"
+# 755, not mktemp's 700: sshd reads its config and authorized_keys from
+# here as root while the mount and the wrapped command run as the
+# invoking user.
 chmod 755 "$SCRATCH"
 SSHD_PID=""
+
+# Whether teardown created the mountpoint and may therefore remove it.
+MNT_CREATED=0
 
 teardown() {
   local rc=$?
@@ -212,7 +238,12 @@ teardown() {
   # holding the port.
   [ -n "$SSHD_PID" ] && { "${SUDO[@]}" kill -- "-$SSHD_PID" 2>/dev/null \
     || "${SUDO[@]}" kill "$SSHD_PID" 2>/dev/null; }
-  "${SUDO[@]}" rm -rf "$MNT" "$SCRATCH" 2>/dev/null
+  # Only remove the mountpoint if this run made it: an explicit
+  # --mount-point may well be a directory that predates us.
+  if [ "$MNT_CREATED" = 1 ]; then
+    "${SUDO[@]}" rm -rf "$MNT" 2>/dev/null
+  fi
+  "${SUDO[@]}" rm -rf "$SCRATCH" 2>/dev/null
   return "$rc"
 }
 trap teardown EXIT
@@ -339,6 +370,7 @@ mount_sshfs() {
     spec="${REMOTE_USER:-$INVOKER_USER}@$HOST:$REMOTE_DIR"
   fi
 
+  [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
   "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
 

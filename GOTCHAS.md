@@ -285,7 +285,7 @@ bug worth chasing rather than a filesystem property.
 Distinct from the cells above: these are harness races, and the fix is in
 this repo rather than in anything under test.
 
-### BeeGFS: `chown: cannot access '/mnt/beegfs': Communication error on send`
+### BeeGFS: `chown: cannot access '<mount>': Communication error on send`
 
 `mount -t beegfs` returns as soon as the client module has registered
 with mgmtd and downloaded the node groups. That is not the same as its
