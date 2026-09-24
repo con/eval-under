@@ -43,9 +43,25 @@ VERSION="${2:?version required}"
 TARGET="${3:-git-annex}"
 
 target_known "$TARGET" || {
-    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]})" >&2
+    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]}" \
+         "${EVAL_UNDER_ONDEMAND_TARGETS[*]})" >&2
     exit 1
 }
+
+# A root-requiring suite under a backend that can only run as the
+# invoking user would measure nothing: every privileged syscall it exists
+# to test fails for want of privilege, not because of the filesystem. The
+# NFS backend has --no-root-squash for this; sshfs has no equivalent,
+# because a FUSE mount belongs to whoever mounted it. Refuse the pair
+# rather than produce a meaningless red cell -- reproduce.yaml offers it
+# in a dropdown.
+if [ "$BACKEND" = sshfs ] && target_needs_root "$TARGET"; then
+    echo "$TARGET needs root, and the sshfs backend always runs the wrapped" >&2
+    echo "command as the invoking user (a FUSE mount belongs to its mounter)." >&2
+    echo "There is no --no-root-squash equivalent here, so this combination" >&2
+    echo "cannot measure what the target is for. Try the nfs or loop backend." >&2
+    exit 2
+fi
 
 # The target scripts re-derive their own defaults from matrix.sh, but an
 # override handed to us must survive into the wrapped child.

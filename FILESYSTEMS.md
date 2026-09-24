@@ -98,7 +98,7 @@ Run 5 of the probe workflow, ubuntu-24.04 unless noted, kernel
 | `exfat` | **BOOTSTRAPPED** | 25s | Crippled as expected: no symlinks, hardlinks, fifos, exec bit, xattrs; case-insensitive; **rejects `:*?` in names** |
 | `s3-rclone` | **BOOTSTRAPPED** | 46s | Crippled in the same shape as exfat -- but SQLite works |
 | `sshfs` | **BOOTSTRAPPED** | 10s | **`hardlink-same-inode=no`** (link() succeeds, the link is invisible), no fifos, no unix sockets, no xattrs, and **1-second timestamp granularity** (1 distinct mtime across 5 rapid creates, vs 5 everywhere else) |
-| `glusterfs` | **BOOTSTRAPPED** | 18s | Full POSIX profile through the FUSE client, SQLite WAL included |
+| `glusterfs` | **BOOTSTRAPPED** | 18s | Full POSIX profile through the FUSE client, SQLite WAL included -- see the note below, this does *not* refute the reported WAL failure |
 | `zfs` | **BOOTSTRAPPED** | 13s | Full POSIX profile |
 | `f2fs` | **BOOTSTRAPPED** | 39s | Full POSIX profile |
 | `ntfs3` | **BOOTSTRAPPED** | 22s | Full POSIX profile -- the in-kernel driver carries symlinks and mode bits, unlike vfat |
@@ -112,7 +112,7 @@ Run 5 of the probe workflow, ubuntu-24.04 unless noted, kernel
 | `ecryptfs` | **NOT BOOTSTRAPPABLE** | 14s | `mount -t ecryptfs` refused with the key options the probe passes |
 | `openafs` | **NOT BOOTSTRAPPABLE** | 295s | `openafs-modules-dkms` fails to build against `6.17.0-1022-azure` |
 | `cephfs` | **NOT BOOTSTRAPPABLE** | 382s | The all-in-one demo container starts, the cluster never becomes responsive |
-| `lustre-client` | **NOT BOOTSTRAPPABLE** | 15s / 0s | 22.04: no `lustre-client-modules-dkms` in the ubuntu2204 repo. 24.04: no ubuntu2404 client repo at all |
+| `lustre-client` | **NOT BOOTSTRAPPABLE** | 15s / 0s | 22.04: no `lustre-client-modules-dkms` in the ubuntu2204 repo. 24.04: no ubuntu2404 client repo under `latest-release`, which is what the probe queries (see below) |
 
 Three of those measurements are worth pulling out, because they change
 what the rows would be *for*:
@@ -137,7 +137,19 @@ what the rows would be *for*:
 - **`ntfs3` is not vfat.** The in-kernel NTFS driver reports symlinks,
   mode bits and xattrs, so it would *not* be a second crippled-filesystem
   row -- it would be a row testing a driver users reach through WSL and
-  external drives, with POSIX mostly intact.
+  external drives, with POSIX mostly intact. Measured on a volume made by
+  `mkfs.ntfs` here, which is not the same thing as a Windows-formatted
+  disk mounted with `umask` defaults.
+
+**The glusterfs row does not contradict the Gluster report in Part 1.**
+Part 1 cites a 2015 gluster-users thread where SQLite WAL fails; the
+probe measures `sqlite-wal=yes`. Both are true of different things: the
+probe stands up a *single-brick, replica-1, localhost* volume, which is
+the cheapest thing that mounts, and WAL needs shared-memory mmap that a
+one-brick local volume can satisfy. The report is from a multi-brick
+deployment. Read the green row as "the bring-up works and a trivial
+volume is POSIX-clean", not as "that report was wrong" -- reproducing it
+needs a real multi-brick volume, which is out of scope here.
 
 Also worth recording as a negative: **every single-node filesystem here
 passes `link-eexist`**, the POSIX rule Lustre is reported to break. The
@@ -183,10 +195,19 @@ modules *prebuilt per kernel* -- their ubuntu2204 index lists names like
 do not run those kernels -- measured, the runner is on
 `6.8.0-1064-azure` (ubuntu-22.04 image) or `6.17.0-1022-azure`
 (ubuntu-24.04). Also measured: `latest-release/ubuntu2204/client` has no
-`lustre-client-modules-dkms` to build from source against it, and there
-is no `ubuntu2404` client repo published at all. So neither the prebuilt
-route nor the DKMS route is open on a GitHub-hosted runner, and that is
-before the server question.
+`lustre-client-modules-dkms` to build from source against it, and
+`latest-release` -- the 2.15.x LTS line, which is what the probe queries
+-- publishes no `ubuntu2404` client repo.
+
+Be careful how far that last point is taken: the 2.16.x *feature* line
+does publish one (`lustre-2.16.0/ubuntu2404`,
+`latest-feature-release/ubuntu2404/client`), and 2.16.0 lists Ubuntu
+24.04 as a supported client platform. It does not rescue us, because
+those modules are prebuilt for `6.8.0-35-generic` and the runner is on
+an azure kernel -- so the conclusion is unchanged while the reason is
+narrower than "no repo exists". Neither the prebuilt route nor the DKMS
+route is open on a GitHub-hosted runner, and that is before the server
+question.
 
 **The server is a second wall.** Lustre's ldiskfs OSD needs a *patched*
 kernel; only the ZFS OSD runs on an unpatched one. So even with a
@@ -249,16 +270,24 @@ on a stock runner in under a minute.
 
 - **`sshfs`**, now the strongest candidate on this list: it is the only
   one measured that breaks a documented git-annex operation outright
-  (`add` on an adjusted unlocked branch, via invisible hardlinks), *and*
+  (any unlocked `git annex add`, via invisible hardlinks -- including but
+  not limited to an adjusted unlocked branch), *and*
   it is the only one with a one-second clock. Backend implemented --
   `bin/eval-under-sshfs`.
 - **`loop --fs exfat`**, the crippled row that is *not* vfat: it also
   rejects `:`, `*` and `?` in filenames, which vfat-with-defaults does
   not surface, and it is what is on every USB drive.
-- **`loop --fs ntfs3`**, which the probe shows is *not* a crippled
-  filesystem -- symlinks, mode bits and xattrs all work. That makes it a
-  test of the in-kernel NTFS driver users reach through WSL and external
-  drives, not a second vfat.
+- **`ntfs3`**, which the probe shows is *not* a crippled filesystem --
+  symlinks, mode bits and xattrs all work -- so it would test the
+  in-kernel NTFS driver users reach through WSL and external drives
+  rather than being a second vfat. It needs a small backend addition
+  first, though: there is no `mkfs.ntfs3` (the probe uses `mkfs.ntfs -F
+  -Q` and then mounts `-t ntfs3`), `install-backend.sh` has no ntfs entry
+  in its loop case, and `bin/eval-under-loop`'s `ntfs` branch mounts
+  without `-t ntfs3`, so with ntfs-3g installed it would land on the FUSE
+  driver instead of the kernel one. Note also that the profile was
+  measured on a Linux-created volume; a Windows-formatted disk mounted
+  with `umask` defaults looks considerably more crippled.
 - **`s3-rclone`**, object storage seen as a filesystem: crippled in the
   exfat shape but with SQLite working, which is a combination nothing
   else on the list produces.

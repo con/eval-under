@@ -13,7 +13,7 @@ name: Probe candidate filesystems
 #
 # All logic lives in bin/ci/probe-backend.sh -- see .claude/CLAUDE.md.
 
-# Reconnaissance is ~25 jobs, so it does not run on every branch push.
+# Reconnaissance is 28 jobs, so it does not run on every branch push.
 # Dispatch it when you want an answer; master re-runs it when the probe
 # itself changes, to catch bit-rot in the bring-up recipes.
 on:
@@ -136,6 +136,7 @@ jobs:
     needs: [probe, backend-smoke]
     if: always()
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: summary-*
@@ -143,17 +144,4 @@ jobs:
           merge-multiple: false
 
       - name: Render the table
-        run: |
-          {
-            echo "| runner | candidate | verdict | time | note |"
-            echo "| --- | --- | --- | --- | --- |"
-            cat summaries/*/summary.txt \
-              | sort -t'|' -k3,3 -k2,2 \
-              | awk -F'|' '{printf "| %s | `%s` | **%s** | %s | %s |\n", $2, $3, $4, $5, $6}'
-            echo
-            echo "### Capability profiles"
-            echo
-            echo '```'
-            cat summaries/*/summary.txt | sort
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+        run: bin/ci/render-probe-table.sh summaries | tee -a "$GITHUB_STEP_SUMMARY"

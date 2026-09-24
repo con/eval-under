@@ -26,14 +26,19 @@ A sparse backing image is `dd`'d, `mkfs.<fs>`'d, and loop-mounted.
 | `mkfs` options | none -- distro defaults -- **except** the filesystems below | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. |
 | `mkfs.gfs2` | `-O -p lock_nolock -j 1 -J 8` | `lock_nolock` is GFS2's single-node lock module: no dlm, no corosync, no pacemaker. One journal because one node mounts it; `-J 8` because the 128MB default journal does not fit in a test-sized image. |
 | `mkfs.ocfs2` | `-F -M local -N 1 -b 4K -C 8K --fs-features=local -q` | `-M local` is OCFS2's equivalent: a local mount needs no o2cb cluster stack. |
-| Image size | per target, `target_loop_size_mb()` in `bin/ci/matrix.sh`, raised to a per-filesystem floor | `git annex test` needs room for many small objects; the other three do not. gfs2 and ocfs2 reserve journal space and cannot live in 100MB, so they are floored at 256MB. The floor is applied unconditionally and logged: `run-under.sh` always passes a `--size` chosen for the target, and no caller knows every filesystem's journal overhead. |
+| Image size | per target, `target_loop_size_mb()` in `bin/ci/matrix.sh`, raised to a per-filesystem floor | `git annex test` needs room for many small objects; the other three do not. a *default* `mkfs.gfs2` wants a 128MB journal, which will not fit in a 100MB image. With this backend's `-J 8` it does fit -- measured -- but 100MB then leaves `git annex test` almost no room, so gfs2 and ocfs2 are floored at 256MB (and btrfs at 120MB). The floor is applied unconditionally and logged: `run-under.sh` always passes a `--size` chosen for the target, and no caller knows every filesystem's journal overhead. |
 | Mount (vfat, msdos, exfat, ntfs) | `-o uid=<invoker>,gid=<invoker>` | These filesystems store no ownership. Without `uid=`, everything belongs to root and an unprivileged wrapped command cannot write. |
 | Mount (gfs2) | `-t gfs2 -o lockproto=lock_nolock`, then `chown` | Named again at mount time so an image labelled for a cluster still mounts single-node. |
 | Mount (everything else) | plain `mount`, then `chown <invoker>` on the mountpoint | ext4/xfs/btrfs carry real ownership; setting it once on the root is enough. |
 
-**Single-node cluster filesystems are a deliberate approximation.** Red
-Hat and Oracle both document `lock_nolock` / `-M local` as
-development-and-test-only, and neither exercises the distributed lock
+**Single-node cluster filesystems are a deliberate approximation.** The
+two vendors say different things about it, and neither says quite what an
+earlier revision of this file claimed ("development-and-test-only"): Red
+Hat does not support GFS2 as a single-node filesystem *at all*, outside
+backup / secondary-site DR and existing single-node customers, and points
+at a local filesystem instead; Oracle documents a local OCFS2 mount as a
+supported configuration you can later migrate into a cluster, not as a
+test-only mode. Either way, neither mode exercises the distributed lock
 manager -- which is exactly the part a real GFS2 or OCFS2 deployment
 would stress. What the row *does* buy is a cluster filesystem's on-disk
 and VFS behaviour under git-annex, at loop-device cost. Read a green
@@ -93,14 +98,18 @@ A throwaway sshd is started on the first free port at or above 2222 --
 its own host key, its own `authorized_keys`, its own pid file, all inside
 the run's scratch directory -- and a fresh backing directory is
 sshfs-mounted back over it. The system sshd is not used and
-`~/.ssh/authorized_keys` is never written to. With `--host` it mounts a
+`~/.ssh/authorized_keys` is never written to. (That is true of this
+backend. `bin/ci/probe-backend.sh`, which predates it, does use the
+system sshd and does append to the real `authorized_keys` -- it now
+removes its own line on teardown, but do not transfer the guarantee.)
+With `--host` it mounts a
 real remote instead, using the caller's ssh config.
 
 | Knob | Value | Why |
 | --- | --- | --- |
 | Port | first free `>= 2222` | Two runs at once (a reproduction while a suite is going, two CI cells on one runner) must not collide. `--port` pins it. |
 | `-o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3` | always | A dropped connection should fail the command, not wedge it forever. |
-| `-o cache=no` | only with `--no-cache` | sshfs caches attributes by default, which hides stale-stat behaviour. Off is the honest mount; on is what users actually have. |
+| `-o cache=no` | only with `--no-cache` | sshfs caches attributes by default, which hides stale-stat behaviour. This turns off sshfs's own cache, not all caching -- the kernel's 1-second attribute timeout still applies, and the stale-size effect above survives it. On is what users actually have. |
 | `-o workaround=rename` | only with `--workaround rename` | Makes sshfs emulate rename-over-existing by unlinking first -- non-atomic, which is what SFTP servers without the POSIX-rename extension force. |
 | Mount/command user | the invoking user | A FUSE mount belongs to whoever ran `sshfs`; root cannot read it without `allow_other`. Same treatment `eval-under-nfs` gives `root_squash`. |
 
@@ -113,10 +122,20 @@ ext4     name=a ino=1884275 nlink=2      name=b ino=1884275 nlink=2
 sshfs    name=a ino=3       nlink=1      name=b ino=4       nlink=1
 ```
 
-This is not a misconfiguration. SFTP has no way to express that two
-names share an inode, and sshfs 3.x has no option to change it
-(`use_ino` was FUSE2; sshfs 3.7 offers only `disable_hardlink`, which
-goes the other way). The capability probe reports it as
+This is not a misconfiguration, and the link is not fake: in the backing
+directory on the server both names really do share one inode with
+`nlink=2`. What SFTP cannot carry is *identity* -- its attribute record
+has neither an inode number nor a link count -- so sshfs synthesises an
+`st_ino` per path and reports `nlink=1` for everything. There is no knob
+for it: `use_ino` (removed in libfuse 3) only ever passed through inode
+numbers that a filesystem supplies, and sshfs has none to supply, so it
+would not have helped under FUSE2 either; sshfs 3.7 offers only
+`disable_hardlink`, which makes `link()` fail outright.
+
+Worse than invisible, and worth knowing when a report mentions truncated
+files: immediately after writing one name, the *other* name still reads
+back with size 0 through the mount -- with `-o cache=no` as well. The
+capability probe reports the inode half as
 `hardlink-same-inode=no` / `hardlink-nlink=no` while `hardlink=yes` --
 which is exactly why those two checks exist. `hardlink` alone called
 sshfs healthy.
@@ -125,20 +144,33 @@ What it costs, measured with git-annex 10.20240129:
 
 - `git annex add` on a **locked** branch: fine. The file becomes a
   symlink into `.git/annex/objects`, and symlinks work.
-- `git annex add` on an **adjusted unlocked** branch: **fails** --
-  `foo failed to link to annex`. add hardlinks the content into the
-  annex and then verifies the link, and the verification cannot succeed
-  on a filesystem where the link is invisible.
+- **Any unlocked `git annex add`: fails** -- `foo failed to link to
+  annex`. add hardlinks the content into the annex and then verifies the
+  link, and the verification cannot succeed on a filesystem where the
+  link is invisible. This is not limited to an adjusted branch: a plain
+  v10 repo fails identically with `annex.addunlocked=true` in git
+  config, set through `git annex config`, or passed as `-c`.
+- `git add` through git's own filter (with `annex.largefiles` matching):
+  **fine** -- the pointer is committed and `git annex fsck` is clean.
+  So is `git annex unlock` of an already-committed file.
 - `git clone` of a local repo: **fails** --
   `fatal: hardlink different from source at '...'`. git's local-clone
   path hardlinks objects and runs the same check.
 
-So: locked repos work, and so do v10 *unlocked* (pointer-file) repos --
-it is specifically the **adjusted unlocked branch** that breaks. In
-`git annex test`, that variant's Init Tests group fails 11 of 12 once
-`add` fails, so a single root cause shows up as a wall of red. That
-matters for DataLad specifically, which leans on adjusted branches far
-more than bare git-annex does.
+So the boundary is not locked-vs-unlocked, and not adjusted-vs-plain:
+it is **who does the ingest**. git-annex hardlinking content into the
+annex fails; git's filter writing a pointer does not.
+
+That distinction is easy to get backwards from the test suite alone,
+because `git annex test` shows `Repo Tests v10 unlocked` **green** and
+only `v10 adjusted unlocked branch` red (11 of 12 in its Init Tests
+group, once `add` fails). The green group is not evidence that unlocked
+repos are fine here -- the suite's unlocked mode ingests with `git add`.
+An earlier revision of this file drew exactly that inference and was
+wrong.
+
+It matters for DataLad, which calls `git annex add`: plain v10 unlocked
+repos break for it too, not just adjusted ones.
 
 **`git annex test` wedges partway through, reproducibly.** Both
 full-suite runs stopped at the same place -- `Remote Tests / unavailable

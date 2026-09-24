@@ -120,7 +120,11 @@ def main() -> int:
         m = yaml.safe_load(fh)
     backends = [(b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}",
                  b["label"]) for b in m["backends"]]
-    targets = [(t["name"], t["label"]) for t in m["targets"]]
+    # Same on-demand filter as update-status.py: an on-demand target is
+    # not a column of the grid, and rendering one produces a column that
+    # can never fill in.
+    targets = [(t["name"], t["label"]) for t in m["targets"]
+               if not t.get("on-demand")]
 
     npass = sum(1 for c in cells.values() if c.get("conclusion") == "success")
     total = len(cells)
