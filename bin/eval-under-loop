@@ -16,7 +16,10 @@
 set -eu
 
 # Defaults (options override; env vars override defaults).
-MNT="${EVAL_UNDER_MOUNT:-/mnt/loop}"
+# Empty MNT means "derive a per-run mountpoint next to the backing
+# image" (see the MNT_BASE block below); only an explicit --mount-point /
+# EVAL_UNDER_MOUNT pins the mount to a fixed path.
+MNT="${EVAL_UNDER_MOUNT:-}"
 KEEP="${EVAL_UNDER_KEEP:-0}"
 SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 
@@ -41,8 +44,17 @@ Requires `mkfs.<fs>` for the chosen filesystem. For the default
 
 Options (flag / env var / default / purpose):
 
-  --mount-point PATH   EVAL_UNDER_MOUNT               /mnt/loop
-      Where to mount the loop device on the host.
+  --mount-point PATH   EVAL_UNDER_MOUNT               (next to backing image)
+      Where to mount the loop device on the host. Default: a fresh
+      per-run directory next to the backing image, both under $TMPDIR
+      (/tmp if unset) -- e.g. with TMPDIR=~/.tmp:
+
+        ~/.tmp/eval-under-loop-B3UXj.img    backing image
+        ~/.tmp/eval-under-loop-B3UXj.loop   where this run mounts it
+
+      The former fixed default (/mnt/loop) collided between concurrent
+      runs, needed root just to create the directory, and hid which run
+      owned the mount. Pass this option when a stable path is wanted.
 
   --set-home           EVAL_UNDER_HOME_ON_MOUNT       (unset)
       Also set HOME=<mount>/home for the wrapped command.
@@ -125,9 +137,16 @@ ensure_mkfs_installed() {
   exit 3
 }
 
-# Backing image (distinct location from the mountpoint).
-IMAGE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-loop-XXXXX").img"
+# Backing image, and the mountpoint the loop device is mounted on. Both
+# derive from one mktemp -u base, so a run leaves a self-describing pair
+# of siblings under $TMPDIR (see --mount-point in usage()).
+MNT_BASE="$(mktemp -u "${TMPDIR:-/tmp}/eval-under-loop-XXXXX")"
+IMAGE="$MNT_BASE.img"
+MNT="${MNT:-$MNT_BASE.loop}"
 LOOP=""
+
+# Whether teardown created the mountpoint and may therefore remove it.
+MNT_CREATED=0
 
 start_loop() {
   log "creating ${SIZE_MB}MB backing image $IMAGE"
@@ -146,6 +165,7 @@ start_loop() {
 
 mount_loop() {
   log "mounting $LOOP ($FS) at $MNT"
+  [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
   # Not every mkfs supports uid= (e.g. ext4 doesn't); pass it only for
   # filesystems that ignore ownership themselves and need it as a mount
@@ -174,7 +194,12 @@ teardown() {
   if [ -n "$LOOP" ]; then
     "${SUDO[@]}" losetup -d "$LOOP" 2>/dev/null || true
   fi
-  "${SUDO[@]}" rm -rf "$MNT" "$IMAGE" 2>/dev/null || true
+  # Only remove the mountpoint if this run made it: an explicit
+  # --mount-point may well be a directory that predates us.
+  if [ "$MNT_CREATED" = 1 ]; then
+    "${SUDO[@]}" rm -rf "$MNT" 2>/dev/null || true
+  fi
+  "${SUDO[@]}" rm -f "$IMAGE" 2>/dev/null || true
   return "$rc"
 }
 trap teardown EXIT

@@ -50,6 +50,11 @@ Common options recognised by every backend:
   --set-home           EVAL_UNDER_HOME_ON_MOUNT
   --keep               EVAL_UNDER_KEEP
 
+Without --mount-point, a backend mounts on a fresh per-run directory
+under $TMPDIR (/tmp if unset), alongside whatever backing state it
+creates there -- not on a fixed /mnt/<backend>. See the backend's own
+--help for the exact names.
+
 Env vars set FOR the wrapped command (all backends):
 
   TMPDIR                     = <mount>
