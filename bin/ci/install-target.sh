@@ -137,7 +137,9 @@ install_pjdfstest() {
 }
 
 case "$TARGET" in
-    git-annex) install_git_annex ;;
+    git-annex|git-annex-linkannex) install_git_annex ;;
+    # mtime-stability ships with this repo and needs nothing installed
+    mtime-stability) ;;
     git)       install_git ;;
     stress-ng) install_stress_ng ;;
     pjdfstest) install_pjdfstest ;;
