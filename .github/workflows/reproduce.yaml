@@ -71,11 +71,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Every input reaches the shell through env, never through template
+      # substitution into the run: body. A dispatch input is free-form
+      # text, and ${{ }} is expanded before bash sees the line, so
+      # interpolating it directly would make the input executable. This
+      # also matches how run-under.sh already takes backend-options.
       - name: Install backend client dependencies
-        run: bin/ci/install-backend.sh "${{ inputs.backend }}" "${{ inputs.backend-version }}"
+        env:
+          BACKEND: ${{ inputs.backend }}
+          BACKEND_VERSION: ${{ inputs.backend-version }}
+        run: bin/ci/install-backend.sh "$BACKEND" "$BACKEND_VERSION"
 
       - name: Install target ${{ inputs.target }}
-        run: bin/ci/install-target.sh "${{ inputs.target }}"
+        env:
+          TARGET: ${{ inputs.target }}
+        run: bin/ci/install-target.sh "$TARGET"
 
       - name: Fetch latest git-annex daily build from con/git-annex
         if: inputs.target == 'git-annex'
@@ -90,16 +100,21 @@ jobs:
 
       - name: Run ${{ inputs.target }} under ${{ inputs.backend }}
         env:
+          BACKEND: ${{ inputs.backend }}
+          BACKEND_VERSION: ${{ inputs.backend-version }}
+          TARGET: ${{ inputs.target }}
           EVAL_UNDER_BACKEND_OPTS: ${{ inputs.backend-options }}
         run: >-
-          sudo -E bin/ci/run-under.sh
-          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
+          sudo -E bin/ci/run-under.sh "$BACKEND" "$BACKEND_VERSION" "$TARGET"
 
       - name: Dump failure logs
         if: failure()
+        env:
+          BACKEND: ${{ inputs.backend }}
+          BACKEND_VERSION: ${{ inputs.backend-version }}
+          TARGET: ${{ inputs.target }}
         run: >-
-          bin/ci/dump-failure-logs.sh
-          "${{ inputs.backend }}" "${{ inputs.backend-version }}" "${{ inputs.target }}"
+          bin/ci/dump-failure-logs.sh "$BACKEND" "$BACKEND_VERSION" "$TARGET"
 
       - name: Upload logs
         if: always()

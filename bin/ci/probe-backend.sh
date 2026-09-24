@@ -67,7 +67,15 @@ PROBE_DIR="${EVAL_UNDER_PROBE_DIR:-/var/tmp/eu-probe}"
 MNT="$PROBE_DIR/mnt"
 NOTE=""
 
-mkdir -p "$MNT"
+# An unusable probe dir is a broken runner, not a filesystem finding: if
+# this were allowed through, the candidate would be recorded in
+# FILESYSTEMS.md as "NOT BOOTSTRAPPABLE" on the strength of a bad
+# EVAL_UNDER_PROBE_DIR. The closing comment of this script promises this
+# exits non-zero; make it true.
+mkdir -p "$MNT" || {
+    echo "unusable probe dir: cannot create $MNT" >&2
+    exit 2
+}
 
 APT_LOCK_TIMEOUT=(-o "DPkg::Lock::Timeout=120")
 apt_update() { sudo apt-get "${APT_LOCK_TIMEOUT[@]}" update -qq; }
@@ -77,8 +85,21 @@ apt_install() {
 }
 
 # Deferred teardown: commands are run in reverse registration order.
+#
+# Entries are eval'd, so every interpolated path has to arrive already
+# quoted -- an EVAL_UNDER_PROBE_DIR containing a space used to split into
+# two arguments and leave the mount behind while the probe still reported
+# success. defer() quotes its arguments itself: pass the command as
+# separate words, not as one pre-built string.
 CLEANUPS=()
-defer() { CLEANUPS+=("$1"); }
+defer() {
+    local quoted
+    quoted="$(printf '%q ' "$@")"
+    CLEANUPS+=("$quoted")
+}
+# For the handful of cleanups that genuinely need shell syntax (||, ;).
+# The caller is then responsible for quoting inside the string.
+defer_shell() { CLEANUPS+=("$1"); }
 # shellcheck disable=SC2317  # invoked from the EXIT trap, not inline
 run_cleanups() {
     [ -n "${EVAL_UNDER_PROBE_KEEP:-}" ] && { echo "I: --keep: leaving $MNT"; return; }
@@ -114,12 +135,12 @@ make_loop() {
     local size="${1:-1G}" img="$PROBE_DIR/img.$$"
     truncate -s "$size" "$img" || return 1
     LOOP="$(sudo losetup --find --show "$img")" || return 1
-    defer "sudo losetup -d $LOOP; rm -f $img"
+    defer_shell "sudo losetup -d '$LOOP'; rm -f '$img'"
 }
 
 mount_and_own() {
     sudo mount "$@" || return 1
-    defer "sudo umount -l $MNT"
+    defer_shell "sudo umount -l '$MNT'"
     sudo chown "$(id -u):$(id -g)" "$MNT" 2>/dev/null || true
 }
 
@@ -188,7 +209,7 @@ setup_zfs() {
     local img="$PROBE_DIR/zfs.img"
     truncate -s 2G "$img" || return 1
     sudo zpool create -f -m "$MNT" eu_probe "$img" || give_up "zpool create failed" || return 1
-    defer "sudo zpool destroy eu_probe; rm -f $img"
+    defer_shell "sudo zpool destroy eu_probe; rm -f '$img'"
     sudo chown "$(id -u):$(id -g)" "$MNT"
 }
 
@@ -206,7 +227,7 @@ setup_overlay() {
 setup_glusterfs() {
     apt_install glusterfs-server || give_up "glusterfs-server not installable" || return 1
     sudo systemctl start glusterd || sudo glusterd || give_up "glusterd will not start" || return 1
-    defer "sudo systemctl stop glusterd || true"
+    defer_shell "sudo systemctl stop glusterd || true"
     sudo systemctl --no-pager status glusterd 2>&1 | head -5 || true
     local brick="$PROBE_DIR/brick" host
     # Gluster records the brick's host in the volfile and insists it be a
@@ -215,7 +236,7 @@ setup_glusterfs() {
     sudo mkdir -p "$brick"
     sudo gluster --mode=script volume create eu_probe "$host:$brick" force \
         || give_up "volume create failed (see output above)" || return 1
-    defer "sudo gluster --mode=script volume stop eu_probe; sudo gluster --mode=script volume delete eu_probe"
+    defer_shell "sudo gluster --mode=script volume stop eu_probe; sudo gluster --mode=script volume delete eu_probe"
     sudo gluster --mode=script volume start eu_probe || give_up "volume start failed" || return 1
     sudo gluster volume info eu_probe || true
     mount_and_own -t glusterfs "$host:/eu_probe" "$MNT"
@@ -233,7 +254,7 @@ setup_cephfs() {
         -e CEPH_DEMO_UID=eu -e DEMO_DAEMONS="mon,mgr,osd,mds" \
         -v /etc/ceph:/etc/ceph -v /var/lib/ceph:/var/lib/ceph \
         quay.io/ceph/demo || give_up "ceph demo container did not start in 7min" || return 1
-    defer "sudo docker rm -f eu-ceph; sudo rm -rf /etc/ceph/* /var/lib/ceph/*"
+    defer_shell "sudo docker rm -f eu-ceph; sudo rm -rf /etc/ceph/* /var/lib/ceph/*"
     # Every ceph client call needs its own timeout. With no reachable mon,
     # `ceph -s` blocks for minutes on its internal retry loop rather than
     # failing -- which is what turned this probe into a 25-minute job that
@@ -250,7 +271,7 @@ setup_cephfs() {
     done
     timeout 20 sudo ceph -s || true
     timeout 60 sudo ceph-fuse "$MNT" || give_up "ceph-fuse mount failed" || return 1
-    defer "sudo umount -l $MNT"
+    defer_shell "sudo umount -l '$MNT'"
     sudo chown "$(id -u):$(id -g)" "$MNT" || true
 }
 
@@ -263,18 +284,33 @@ setup_cifs() {
     local share="$PROBE_DIR/share"
     sudo mkdir -p "$share"
     sudo chmod 777 "$share"
-    sudo tee -a /etc/samba/smb.conf >/dev/null <<EOF
-
+    # Write the share to its own include file and register the include,
+    # so teardown can remove the share without rewriting smb.conf. The
+    # previous version appended the share to smb.conf itself and only
+    # stopped smbd, so the next `systemctl start smbd` -- or a reboot --
+    # re-exposed a mode-777 `force user = root` share, on every
+    # interface, together with a known SMB password for root.
+    local inc=/etc/samba/eu-probe.conf
+    sudo tee "$inc" >/dev/null <<EOF
 [euprobe]
    path = $share
    browsable = yes
    read only = no
    guest ok = no
    force user = root
+   hosts allow = 127.0.0.1
+   hosts deny = 0.0.0.0/0
 EOF
+    grep -qF "include = $inc" /etc/samba/smb.conf \
+        || echo "   include = $inc" | sudo tee -a /etc/samba/smb.conf >/dev/null
+    defer sudo rm -f "$inc"
+    defer_shell "sudo sed -i '\\#   include = $inc#d' /etc/samba/smb.conf || true"
+
     printf 'eupass\neupass\n' | sudo smbpasswd -s -a root || give_up "smbpasswd failed" || return 1
+    # Take the password back out of the passdb, not just off the wire.
+    defer_shell "sudo smbpasswd -x root >/dev/null 2>&1 || true"
     sudo systemctl restart smbd || give_up "smbd will not start" || return 1
-    defer "sudo systemctl stop smbd || true"
+    defer_shell "sudo systemctl stop smbd || true"
     mount_and_own -t cifs "//127.0.0.1/euprobe" \
         -o "username=root,password=eupass,uid=$(id -u),gid=$(id -g),vers=3.1.1" "$MNT"
 }
@@ -284,14 +320,20 @@ setup_sshfs() {
     sudo systemctl start ssh || sudo systemctl start sshd || give_up "no sshd" || return 1
     local key="$HOME/.ssh/eu_probe"
     mkdir -p "$HOME/.ssh"
-    [ -f "$key" ] || ssh-keygen -t ed25519 -N '' -f "$key" -q
+    [ -f "$key" ] || ssh-keygen -t ed25519 -N '' -f "$key" -q -C eval-under-probe
+    # Appending to the real ~/.ssh/authorized_keys and leaving it there
+    # is what bin/eval-under-sshfs exists to avoid; the probe has no
+    # business being less careful. Register the removal of exactly the
+    # line we add before adding it.
     cat "$key.pub" >> "$HOME/.ssh/authorized_keys"
     chmod 600 "$HOME/.ssh/authorized_keys"
+    defer_shell "sed -i '/eval-under-probe/d' '$HOME/.ssh/authorized_keys' || true"
+    defer rm -f "$key" "$key.pub"
     local backing="$PROBE_DIR/sshfs-backing"
     mkdir -p "$backing"
     sshfs -o "IdentityFile=$key,StrictHostKeyChecking=no,UserKnownHostsFile=/dev/null" \
         "$(id -un)@127.0.0.1:$backing" "$MNT" || give_up "sshfs mount failed" || return 1
-    defer "fusermount3 -u $MNT || fusermount -u $MNT || sudo umount -l $MNT"
+    defer_shell "fusermount3 -u '$MNT' || fusermount -u '$MNT' || sudo umount -l '$MNT'"
 }
 
 setup_gocryptfs() {
@@ -301,7 +343,7 @@ setup_gocryptfs() {
     echo eupassphrase > "$pw"
     gocryptfs -init -passfile "$pw" -q "$cipher" || give_up "gocryptfs init failed" || return 1
     gocryptfs -passfile "$pw" -q "$cipher" "$MNT" || give_up "gocryptfs mount failed" || return 1
-    defer "fusermount3 -u $MNT || fusermount -u $MNT || sudo umount -l $MNT"
+    defer_shell "fusermount3 -u '$MNT' || fusermount -u '$MNT' || sudo umount -l '$MNT'"
 }
 
 setup_encfs() {
@@ -310,7 +352,7 @@ setup_encfs() {
     mkdir -p "$cipher"
     echo eupassphrase | encfs --standard --stdinpass "$cipher" "$MNT" \
         || give_up "encfs mount failed" || return 1
-    defer "fusermount3 -u $MNT || fusermount -u $MNT || sudo umount -l $MNT"
+    defer_shell "fusermount3 -u '$MNT' || fusermount -u '$MNT' || sudo umount -l '$MNT'"
 }
 
 setup_ecryptfs() {
@@ -336,7 +378,7 @@ setup_s3_rclone() {
     sudo docker run -d --name eu-minio -p 9000:9000 \
         -e MINIO_ROOT_USER=euprobe -e MINIO_ROOT_PASSWORD=euprobe123 \
         quay.io/minio/minio server /data || give_up "minio did not start" || return 1
-    defer "sudo docker rm -f eu-minio"
+    defer_shell "sudo docker rm -f eu-minio"
     local i
     for i in $(seq 1 30); do
         curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 && break
@@ -350,7 +392,7 @@ setup_s3_rclone() {
     rclone mkdir eu:euprobe || give_up "rclone mkdir failed" || return 1
     rclone mount --vfs-cache-mode full --daemon eu:euprobe "$MNT" \
         || give_up "rclone mount failed" || return 1
-    defer "fusermount3 -u $MNT || fusermount -u $MNT || sudo umount -l $MNT"
+    defer_shell "fusermount3 -u '$MNT' || fusermount -u '$MNT' || sudo umount -l '$MNT'"
     sleep 3
 }
 
@@ -374,7 +416,7 @@ setup_lustre_client() {
         | sed -n 's/^Package: \(lustre-client-modules.*\)/  \1/p' | sort -u | head -20
     apt_install dkms "linux-headers-$(uname -r)" || return 1
     echo "deb [trusted=yes] $repo/ ./" | sudo tee /etc/apt/sources.list.d/lustre.list >/dev/null
-    defer "sudo rm -f /etc/apt/sources.list.d/lustre.list"
+    defer_shell "sudo rm -f /etc/apt/sources.list.d/lustre.list"
     apt_install lustre-client-modules-dkms lustre-client-utils \
         || give_up "lustre client DKMS build failed on kernel $(uname -r)" || return 1
     sudo modprobe lustre || give_up "lustre module built but will not load" || return 1

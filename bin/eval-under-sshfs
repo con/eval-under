@@ -84,8 +84,9 @@ Options (flag / env var / default / purpose):
 
   --port N             EVAL_UNDER_SSHFS_PORT         (first free >=2222)
       Port for the throwaway sshd (loopback mode only). Left unset, the
-      first free port at or above 2222 is used, so concurrent runs do
-      not collide.
+      first free port at or above 2222 is used, and a port lost to a
+      concurrent run between the scan and the bind is retried on the
+      next one up, so concurrent runs do not collide.
 
   --host HOST          EVAL_UNDER_SSHFS_HOST         (unset)
       Mount from a remote host instead of starting a local sshd. Uses
@@ -93,7 +94,9 @@ Options (flag / env var / default / purpose):
       to that host's sshd.
 
   --user USER          EVAL_UNDER_SSHFS_USER         (invoking user)
-      Remote username.
+      Remote username. Requires --host: the throwaway sshd generated for
+      loopback mode only admits the invoking user, so any other name
+      there could only ever be refused.
 
   --remote-dir PATH    EVAL_UNDER_SSHFS_DIR          (remote: required)
       Directory on the remote host to mount. In loopback mode this
@@ -165,6 +168,11 @@ done
 
 [ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
 
+
+# Did the caller pin the port? Decided before start_local_sshd starts
+# reassigning PORT while hunting for a free one.
+PORT_PINNED="${PORT:+1}"
+
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || {
     echo "must run as root (or have sudo available)" >&2; exit 2; }
@@ -184,14 +192,37 @@ else
   INVOKER_USER="$(id -un)"
 fi
 
-# Run something as the invoking user, or directly if we already are them.
+# In loopback mode the generated sshd config has AllowUsers <invoker>, so
+# a different --user could only ever be refused -- with nothing but
+# "Connection reset by peer" to explain it.
+if [ -n "$REMOTE_USER" ] && [ -z "$HOST" ]; then
+  echo "--user needs --host: the throwaway sshd only accepts $INVOKER_USER" >&2
+  exit 2
+fi
+
+# Dropping privileges needs `sudo` itself, so this deliberately does NOT
+# go through ${SUDO[@]}: that array is EMPTY when we are already root,
+# which is exactly the case that needs the drop. Under
+# `sudo eval-under sshfs ...` -- the documented invocation, and the one
+# bin/ci/run-under.sh uses -- id -u is 0 while INVOKER_UID is the real
+# user, so "${SUDO[@]}" -u would expand to a bare `-u`. bin/eval-under-nfs
+# spells out `sudo -u` for the same reason.
 as_invoker() {
-  if [ "$INVOKER_UID" != "$(id -u)" ]; then
-    "${SUDO[@]}" -u "$INVOKER_USER" "$@"
-  else
+  if [ "$INVOKER_UID" = "$(id -u)" ]; then
     "$@"
+  else
+    sudo -u "$INVOKER_USER" "$@"
   fi
 }
+
+# Dropping privileges is only possible with sudo present, whether or not
+# we needed it to become root in the first place.
+if [ "$INVOKER_UID" != "$(id -u)" ]; then
+  command -v sudo >/dev/null || {
+    echo "ERROR: need sudo to run as the invoking user ($INVOKER_USER)" >&2
+    exit 2
+  }
+fi
 
 log() { printf '\nI: %s\n' "$*"; }
 
@@ -211,8 +242,11 @@ MNT="${MNT:-$MNT_BASE.sshfs}"
 mkdir -p "$SCRATCH"
 # 755, not mktemp's 700: sshd reads its config and authorized_keys from
 # here as root while the mount and the wrapped command run as the
-# invoking user.
+# invoking user. The mode is not enough on its own -- root created the
+# directory, so the invoker also has to own it or every as_invoker write
+# into it (the keys, authorized_keys, the backing dir) is EACCES.
 chmod 755 "$SCRATCH"
+chown "$INVOKER_UID:$INVOKER_GID" "$SCRATCH"
 SSHD_PID=""
 
 # Whether teardown created the mountpoint and may therefore remove it.
@@ -229,6 +263,12 @@ teardown() {
     return "$rc"
   fi
   log "teardown"
+  # Kill the wrapped command first. On a signal it is still running, and
+  # it must not survive the filesystem it is working on.
+  pkill -P $$ 2>/dev/null
+  if command -v fuser >/dev/null 2>&1; then
+    "${SUDO[@]}" fuser -k -M "$MNT" 2>/dev/null
+  fi
   # fusermount as the mount's owner; fall back to a lazy root umount.
   as_invoker fusermount3 -u "$MNT" 2>/dev/null \
     || as_invoker fusermount -u "$MNT" 2>/dev/null \
@@ -246,7 +286,17 @@ teardown() {
   "${SUDO[@]}" rm -rf "$SCRATCH" 2>/dev/null
   return "$rc"
 }
+# Teardown on a signal too, not just a clean exit: otherwise a SIGTERM
+# unmounts and rm -rf's the filesystem out from under a wrapped command
+# that is still running, and the orphan keeps writing into a deleted
+# inode. on_signal drops the EXIT trap so teardown runs exactly once.
+on_signal() {
+  trap - EXIT
+  teardown
+  exit 130
+}
 trap teardown EXIT
+trap on_signal INT TERM HUP
 
 # First free TCP port at or above $1 on loopback. `ss` if we have it,
 # otherwise a bash /dev/tcp connect probe: a refused connection means
@@ -293,16 +343,50 @@ start_local_sshd() {
     exit 3
   }
 
-  if [ -z "$PORT" ]; then
-    PORT="$(find_free_port 2222)" || {
-      echo "ERROR: no free port in 2222-2422" >&2; exit 3; }
-  fi
-
   as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/id" -C eval-under-sshfs
   as_invoker ssh-keygen -t ed25519 -N '' -q -f "$SCRATCH/hostkey" -C eval-under-sshfs-host
   as_invoker cp "$SCRATCH/id.pub" "$SCRATCH/authorized_keys"
   chmod 600 "$SCRATCH/authorized_keys"
 
+  # sshd refuses to start without its privilege-separation directory,
+  # which is absent in minimal containers (it is created at boot by the
+  # packaging, not by the package install).
+  "${SUDO[@]}" mkdir -p /run/sshd
+
+  # Finding a free port and binding it are two steps, and a concurrent
+  # run can take the port in between -- with four runs on one machine,
+  # three used to die on "sshd did not start". So treat a failed bind as
+  # a lost race and try the next free port up, unless the caller pinned
+  # one with --port.
+  local tries=0 from=2222
+  while [ "$tries" -lt 5 ]; do
+    tries=$((tries + 1))
+    [ -n "$PORT_PINNED" ] || PORT="$(find_free_port "$from")" || {
+      echo "ERROR: no free port at or above $from" >&2; exit 3; }
+    write_sshd_config "$sftp_server"
+    log "starting throwaway sshd on 127.0.0.1:$PORT"
+    # Run it as root so any AllowUsers target can log in; it is bound to
+    # loopback and accepts a single ephemeral key. -E keeps its log, which
+    # is the only place an auth refusal is ever explained.
+    if "${SUDO[@]}" "$sshd_bin" -f "$SCRATCH/sshd_config" \
+         -E "$SCRATCH/sshd.log" && wait_for_sshd_pid; then
+      log "sshd pid $SSHD_PID (port $PORT)"
+      return 0
+    fi
+    # Reap anything that did start before we move the port: otherwise it
+    # survives teardown, because SSHD_PID is still empty.
+    "${SUDO[@]}" pkill -f "sshd -f $SCRATCH/sshd_config" 2>/dev/null || true
+    [ -z "$PORT_PINNED" ] || break
+    from=$((PORT + 1))
+  done
+
+  echo "ERROR: sshd did not start" >&2
+  dump_sshd_log
+  exit 3
+}
+
+# The config is rewritten per attempt because the Port line changes.
+write_sshd_config() {
   cat > "$SCRATCH/sshd_config" <<EOF
 Port $PORT
 ListenAddress 127.0.0.1
@@ -313,31 +397,37 @@ AuthorizedKeysFile $SCRATCH/authorized_keys
 # StrictModes would refuse. This sshd is reachable on loopback only and
 # accepts exactly one key, so the check buys nothing here.
 StrictModes no
-UsePAM no
+# UsePAM yes, deliberately. With PAM off, sshd applies its own
+# locked-account check and refuses any user whose shadow password field
+# is "!" -- which is the normal state of a service or CI account created
+# without a password, so the mount failed with nothing but
+# "read: Connection reset by peer" to go on. Password auth is off below,
+# so PAM here only does account/session, not authentication.
+UsePAM yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin yes
 AllowUsers $INVOKER_USER
-Subsystem sftp $sftp_server
+Subsystem sftp $1
 EOF
+  "${SUDO[@]}" rm -f "$SCRATCH/sshd.pid"
+}
 
-  # sshd refuses to start without its privilege-separation directory,
-  # which is absent in minimal containers (it is created at boot by the
-  # packaging, not by the package install).
-  "${SUDO[@]}" mkdir -p /run/sshd
-
-  log "starting throwaway sshd on 127.0.0.1:$PORT"
-  # Run it as root so any AllowUsers target can log in; it is bound to
-  # loopback and accepts a single ephemeral key.
-  "${SUDO[@]}" "$sshd_bin" -f "$SCRATCH/sshd_config"
+wait_for_sshd_pid() {
   local waited=0
   while [ ! -s "$SCRATCH/sshd.pid" ] && [ "$waited" -lt 50 ]; do
     sleep 0.1
     waited=$((waited + 1))
   done
-  [ -s "$SCRATCH/sshd.pid" ] || { echo "ERROR: sshd did not start" >&2; exit 3; }
+  [ -s "$SCRATCH/sshd.pid" ] || return 1
   SSHD_PID="$(cat "$SCRATCH/sshd.pid")"
-  log "sshd pid $SSHD_PID"
+}
+
+# sshd explains an auth refusal only in its own log, never to the client.
+dump_sshd_log() {
+  [ -s "$SCRATCH/sshd.log" ] || return 0
+  echo "--- sshd log ---" >&2
+  sed 's/^/E: /' "$SCRATCH/sshd.log" >&2
 }
 
 # Assemble the -o list. Ours first, caller's last so theirs wins.
@@ -372,12 +462,21 @@ mount_sshfs() {
 
   [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
-  "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
+  # Only re-own a directory we made. An explicit --mount-point may be
+  # someone's existing directory, and teardown has no way to put its
+  # ownership back.
+  if [ "$MNT_CREATED" = 1 ]; then
+    "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
+  fi
 
   # Remote mode never called start_local_sshd, so PORT may still be
   # empty: that is plain ssh, which means 22.
   log "sshfs -p ${PORT:=22} -o $opts $spec $MNT"
-  as_invoker sshfs -p "$PORT" -o "$opts" "$spec" "$MNT"
+  if ! as_invoker sshfs -p "$PORT" -o "$opts" "$spec" "$MNT"; then
+    echo "ERROR: sshfs mount failed" >&2
+    dump_sshd_log
+    exit 3
+  fi
 
   # An sshfs mount can appear in the mount table before the first
   # request round-trips. Touch it once so a failure surfaces here rather
@@ -396,7 +495,9 @@ fi
 
 if [ "$INVOKER_UID" != "$(id -u)" ]; then
   log "running (as uid=$INVOKER_UID): $*"
-  "${SUDO[@]}" -u "$INVOKER_USER" -E \
+  # Literal sudo, not "${SUDO[@]}" -- same reason as in as_invoker: the
+  # array is empty precisely when we are root and need the drop.
+  sudo -u "$INVOKER_USER" -E \
     env HOME="$RUN_HOME" TMPDIR="$MNT" DATALAD_TESTS_TEMP_DIR="$MNT" \
     "$@"
 else

@@ -42,11 +42,33 @@ trap 'rm -rf "$work" 2>/dev/null || true' EXIT
 
 say() { printf '%s=%s\n' "$1" "$2"; }
 
+# Several checks below are python3 one-liners. Without python3 they would
+# each exit non-zero and be reported as a missing *filesystem feature* --
+# including sqlite-wal, the most predictive value in this whole profile --
+# so a profile pasted into a bug report would blame the filesystem for a
+# missing interpreter. Refuse to produce a half-profile instead.
+command -v python3 >/dev/null 2>&1 || {
+    echo "python3 is required: without it, checks that need it would be" >&2
+    echo "reported as unsupported filesystem features rather than as a" >&2
+    echo "missing tool." >&2
+    exit 2
+}
+
 # Run a check in a subshell; "yes" if it exits 0, "no" otherwise. Output
 # is swallowed -- the verdict is the value.
+#
+# Exit 127 is kept distinct: a check whose helper is absent reports
+# "unknown", never "no", for the same reason as the python3 preflight
+# above.
 check() {
     local key="$1"; shift
-    if ( "$@" ) >/dev/null 2>&1; then say "$key" yes; else say "$key" no; fi
+    if ( "$@" ) >/dev/null 2>&1; then
+        say "$key" yes
+    elif [ "$?" = 127 ]; then
+        say "$key" unknown
+    else
+        say "$key" no
+    fi
 }
 
 {
