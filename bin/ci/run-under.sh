@@ -13,10 +13,11 @@
 # usage:
 #   bin/ci/run-under.sh <backend> <version> [target]
 #
-#   backend = beegfs | nfs | loop
+#   backend = beegfs | nfs | loop | sshfs
 #   version = for beegfs: point release (e.g. 7.4.6, 8.1.0)
 #             for loop:   filesystem type (e.g. vfat, ext4)
 #             for nfs:    literal "n/a"
+#             for sshfs:  literal "n/a"
 #   target  = git-annex (default) | git | stress-ng | pjdfstest
 #
 # env overrides:
@@ -43,6 +44,20 @@ target_known "$TARGET" || {
     exit 1
 }
 
+# A root-requiring suite under a backend that can only run as the
+# invoking user would measure nothing: every privileged syscall it exists
+# to test fails for want of privilege, not because of the filesystem. The
+# NFS backend has --no-root-squash for this; sshfs has no equivalent,
+# because a FUSE mount belongs to whoever mounted it. Refuse the pair up
+# front rather than produce a meaningless red result.
+if [ "$BACKEND" = sshfs ] && target_needs_root "$TARGET"; then
+    echo "$TARGET needs root, and the sshfs backend always runs the wrapped" >&2
+    echo "command as the invoking user (a FUSE mount belongs to its mounter)." >&2
+    echo "There is no --no-root-squash equivalent here, so this combination" >&2
+    echo "cannot measure what the target is for. Try the nfs or loop backend." >&2
+    exit 2
+fi
+
 # The target scripts re-derive their own defaults from matrix.sh, but an
 # override handed to us must survive into the wrapped child.
 export EVAL_UNDER_SRC_DIR
@@ -59,6 +74,7 @@ case "$BACKEND" in
             # need an export that does not squash root, and need to keep
             # their privileges rather than being dropped to the invoker.
             target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
+    sshfs)  opts=() ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
 
