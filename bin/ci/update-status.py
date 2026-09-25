@@ -23,7 +23,10 @@
 #   bin/ci/update-status.py <status.json> <results-dir> [--jobs jobs.json]
 #
 # <results-dir> holds the downloaded result-<slug> artifacts, each with a
-# `conclusion` file (see the "Record cell result" step in test.yaml).
+# `conclusion` file (see the "Record cell result" step in test.yaml) and,
+# when the known-issues check ran, a `verdict.json` from
+# bin/ci/known_issues.py. The verdict's `state` is what the report shows
+# -- a job can be green (every failure known) while the cell is failing.
 #
 # --jobs takes the output of
 #     gh api --paginate repos/$REPO/actions/runs/$RUN_ID/jobs
@@ -67,6 +70,38 @@ def matrix_cells(matrix_file: Path) -> dict[str, dict]:
                 "label": f"{b['label']} / {t['label']}",
             }
     return cells
+
+
+def read_verdicts(results_dir: Path) -> dict[str, dict]:
+    """slug -> verdict.json, for the result-<slug> artifacts that have one."""
+    out = {}
+    if results_dir.is_dir():
+        for f in sorted(results_dir.glob("result-*/verdict.json")):
+            try:
+                out[f.parent.name[len("result-"):]] = json.loads(f.read_text())
+            except ValueError as e:
+                print(f"W: {f}: {e}", file=sys.stderr)
+    return out
+
+
+def verdict_fields(v: dict | None) -> dict:
+    """The slice of a verdict worth keeping in status.json.
+
+    Everything the report needs and no more: status.json doubles as
+    history (see publish-status.sh), so per-test lists stay short.
+    """
+    if not v:
+        return {}
+    return {
+        "state": v.get("state", ""),
+        "reason": v.get("reason", ""),
+        "version": v.get("version", ""),
+        "counts": v.get("counts", {}),
+        "new_failures": v.get("new_failures", [])[:10],
+        "issues": {iid: {k: e[k] for k in ("status", "expect", "fail", "pass", "coarse")
+                         if k in e}
+                   for iid, e in v.get("issues", {}).items()},
+    }
 
 
 def read_conclusions(results_dir: Path) -> dict[str, str]:
@@ -154,6 +189,7 @@ def main() -> int:
     prior = status.get("cells", {})
 
     conclusions = read_conclusions(args.results_dir)
+    verdicts = read_verdicts(args.results_dir)
     urls = job_urls(args.jobs)
 
     merged, updated, kept, pruned = {}, 0, 0, 0
@@ -164,6 +200,7 @@ def main() -> int:
             if old is None or newer((run_number, run_attempt), old_key):
                 merged[slug] = {
                     **meta,
+                    **verdict_fields(verdicts.get(slug)),
                     "conclusion": conclusions[slug],
                     "run_id": run_id,
                     "run_number": run_number,

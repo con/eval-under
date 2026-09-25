@@ -23,8 +23,11 @@
 #
 # env:
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built pjdfstest
-#   EVAL_UNDER_PJDFSTEST_ARGS  extra `prove` args (default: -r, add -v
-#                              for the per-assertion firehose)
+#   EVAL_UNDER_PJDFSTEST_ARGS  `prove` args (default: -v -r). -v is what
+#                              puts every assertion's TAP line in the log,
+#                              which bin/ci/collect-results.py needs for
+#                              per-assertion results; drop it and the cell
+#                              reports incomplete.
 #   TMPDIR                     <mount> -- the suite runs with cwd here
 
 set -euo pipefail
@@ -35,7 +38,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/matrix.sh"
 
 SRC="$EVAL_UNDER_SRC_DIR/pjdfstest"
-PROVE_ARGS="${EVAL_UNDER_PJDFSTEST_ARGS:--r}"
+PROVE_ARGS="${EVAL_UNDER_PJDFSTEST_ARGS:--v -r}"
 
 [ -x "$SRC/pjdfstest" ] || {
     echo "ERROR: no pjdfstest build at $SRC -- run bin/ci/install-target.sh pjdfstest first" >&2

@@ -14,8 +14,9 @@
 # to the exact job log of the run that produced its current state, the
 # same shape as con/git-annex's con.github.io/git-annex-ci-reports.
 #
-# It also carries what a badge cannot: which run, how long ago, and the
-# standing explanation for a cell that is red on purpose.
+# It also carries what a badge cannot: which run, how long ago, which
+# known issues (.github/known-issues.yaml) a red cell's failures fall
+# under, and which failures are new.
 #
 # usage:
 #   bin/ci/render-report.py <status.json> <output-dir>
@@ -25,6 +26,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,27 +34,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 
-# Cells that are red for a known, documented reason. Keeps the page
-# honest: a red cell here is a finding, not a regression to chase.
-# Keyed by slug; kept in sync with GOTCHAS.md by hand (there are ten).
-KNOWN_RED = {
-    "loop-vfat-git-annex": "vfat has no symlinks or ownership",
-    "loop-vfat-git": "git's POSIXPERM prereq is set from uname, never probed",
-    "loop-vfat-stress-ng": "vfat lacks chown/xattr/hardlink semantics",
-    "loop-vfat-pjdfstest": "vfat is not a POSIX filesystem",
-    "beegfs-7.4.6-pjdfstest": "BeeGFS POSIX conformance gaps",
-    "beegfs-8.1.0-pjdfstest": "BeeGFS POSIX conformance gaps",
-    "beegfs-7.4.6-git-annex": "the bug this repo exists to characterise",
-    "beegfs-8.1.0-git-annex": "the bug this repo exists to characterise",
-    "nfs-pjdfstest": "NFS chown/setuid divergence (106 of 1280 assertions)",
-    "loop-ext4-git-annex": "pre-existing, predates this harness",
-}
+import known_issues  # noqa: E402  (bin/ci/known_issues.py, next to this file)
 
-STATE = {
-    "success": ("passing", "#4c1"),
-    "failure": ("failing", "#e05d44"),
-    "cancelled": ("cancelled", "#9f9f9f"),
-    "skipped": ("skipped", "#9f9f9f"),
+# Badge wording and colour per cell state (see bin/ci/known_issues.py).
+# A job-level conclusion is the fallback for cells last run before the
+# known-issues check existed, which carry no state.
+STATE_TEXT = {
+    "passing": "passing",
+    "failing-known": "failing (known)",
+    "failing-new": "new failures",
+    "incomplete": "incomplete",
+    "success": "passing",
+    "failure": "failing",
+    "cancelled": "cancelled",
+    "skipped": "skipped",
 }
 
 CSS = """
@@ -75,19 +70,78 @@ td.cell:target { background:var(--hl); }
 a { color:var(--accent); text-decoration:none }
 a:hover { text-decoration:underline }
 .meta { display:block; font-size:.75rem; color:var(--muted); margin-top:.3rem }
-.why { display:block; font-size:.75rem; color:var(--muted); font-style:italic; margin-top:.15rem }
+.why { display:block; font-size:.75rem; color:var(--muted); margin-top:.15rem }
+.why.new { color:#cf222e; font-weight:600 }
+.why.fixed { color:var(--accent) }
+.issue { margin:1.5rem 0; padding-top:.5rem; border-top:1px solid var(--line) }
+.issue:target { background:var(--hl) }
+.issue h3 { font-size:1rem; margin:.2rem 0 }
+.tag { display:inline-block; font-size:.7rem; padding:0 .4rem; border:1px solid var(--line);
+  border-radius:1rem; color:var(--muted); margin-right:.25rem }
+code { font-size:.85em }
 footer { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
   color:var(--muted); font-size:.85rem }
 """
 
 
-def render_badge(conclusion: str, title: str, out: Path) -> None:
+def render_badge(status: str, title: str, out: Path, text: str = "") -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
-        [str(HERE / "render-badge.sh"), conclusion, title],
+        [str(HERE / "render-badge.sh"), status, title] + ([text] if text else []),
         capture_output=True, text=True, check=True,
     )
     out.write_text(r.stdout)
+
+
+def code(text: str) -> str:
+    """Escape, then render Markdown `code` spans -- all notes ever use."""
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(text))
+
+
+def cell_notes(c: dict, st: str, fixed: list[str]) -> str:
+    """The lines under a badge: which issues, what is new, what is fixed."""
+    out = []
+    if st == "incomplete" and c.get("reason"):
+        out.append(f'<span class="why new">incomplete: {html.escape(c["reason"])}</span>')
+    new = c.get("new_failures", [])
+    if new:
+        more = c.get("counts", {}).get("new_fail", len(new)) - len(new[:3])
+        out.append('<span class="why new">new: ' + ", ".join(
+            f"<code>{html.escape(t)}</code>" for t in new[:3])
+            + (f" and {more} more" if more > 0 else "") + "</span>")
+    for iid, e in c.get("issues", {}).items():
+        if e.get("status") == "reproduced":
+            n = e.get("fail", 0)
+            out.append(f'<span class=why>known: <a href="#{iid}">{iid}</a>'
+                       f' ({n} test{"s" if n != 1 else ""})</span>')
+    for iid in fixed:
+        out.append(f'<span class="why fixed">not reproduced: <a href="#{iid}">{iid}</a> '
+                   f'&mdash; fixed?</span>')
+    return "".join(out)
+
+
+def render_issue(i: dict, cells: dict, repo: str) -> str:
+    def href(link: str) -> str:
+        return link if "://" in link else f"https://github.com/{repo}/blob/master/{link}"
+
+    where = []
+    for slug, c in cells.items():
+        e = c.get("issues", {}).get(i["id"])
+        if e is None:
+            continue
+        where.append(f'<a href="#{slug}">{html.escape(slug)}</a>: '
+                     f'{html.escape(e.get("status", "?"))}'
+                     + (f' ({e["fail"]} failed)' if e.get("fail") else ""))
+    tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in i["tags"])
+    scope = "whole cell" if known_issues.is_coarse(i) else f'{len(i["_tests"])} tests named'
+    links = ", ".join(f'<a href="{html.escape(href(l))}">{html.escape(l)}</a>' for l in i["links"])
+    notes = f"<p>{code(i['notes'].strip())}</p>" if i.get("notes") else ""
+    fixed_in = (f" &middot; fixed in {html.escape(i['fixed-in'])}" if i.get("fixed-in") else "")
+    return (f'<div class=issue id="{i["id"]}"><h3><code>{i["id"]}</code>: '
+            f'{html.escape(i["title"])}</h3>{tags}'
+            f'<span class=meta>expect {i["expect"]} &middot; {scope}{fixed_in}</span>'
+            f'<span class=meta>{"; ".join(where) or "no cell has reported on it yet"}</span>'
+            f'{notes}<span class=meta>see {links}</span></div>\n')
 
 
 def ago(iso: str) -> str:
@@ -122,11 +176,19 @@ def main() -> int:
                  b["label"]) for b in m["backends"]]
     targets = [(t["name"], t["label"]) for t in m["targets"]]
 
-    npass = sum(1 for c in cells.values() if c.get("conclusion") == "success")
+    ki = known_issues.load()
+    issues = {i["id"]: i for i in ki["issues"]}
+
+    def state(c: dict) -> str:
+        return c.get("state") or c.get("conclusion", "unknown")
+
+    npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
+    nnew = sum(1 for c in cells.values() if state(c) in ("failing-new", "incomplete"))
     total = len(cells)
-    overall = "success" if npass == total else "failure"
-    render_badge(overall, f"eval-under: {npass}/{total} cells passing",
-                 args.outdir / "badges" / "overall.svg")
+    overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
+    render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
+                 args.outdir / "badges" / "overall.svg",
+                 f"{npass}/{total} passing" + (f", {nnew} unexpected" if nnew else ""))
 
     rows = []
     for bslug, blabel in backends:
@@ -134,12 +196,19 @@ def main() -> int:
         for tname, tlabel in targets:
             slug = f"{bslug}-{tname}"
             c = cells.get(slug, {"conclusion": "unknown"})
-            concl = c.get("conclusion", "unknown")
+            st = state(c)
             label = c.get("label", slug)
-            render_badge(concl, label, args.outdir / "badges" / f"{slug}.svg")
+            cissues = c.get("issues", {})
+            fixed = [i for i, e in cissues.items()
+                     if e.get("status") == "not-reproduced" and e.get("expect") == "fail"]
+            text = STATE_TEXT.get(st, "unknown")
+            if st == "failing-new":
+                text = f"{c.get('counts', {}).get('new_fail', '?')} new failing"
+            if fixed:
+                text += f" +{len(fixed)} fixed?"
+            render_badge(st, label, args.outdir / "badges" / f"{slug}.svg", text)
 
-            text, _ = STATE.get(concl, ("unknown", "#9f9f9f"))
-            img = (f'<img src="badges/{slug}.svg" alt="{html.escape(label)}: {text}" '
+            img = (f'<img src="badges/{slug}.svg" alt="{html.escape(label)}: {html.escape(text)}" '
                    f'height="20">')
             url = c.get("job_url", "")
             body = f'<a href="{html.escape(url)}">{img}</a>' if url else img
@@ -149,14 +218,11 @@ def main() -> int:
                 attempt = c.get("run_attempt", 1)
                 run = f"#{c['run_number']}" + (f".{attempt}" if attempt > 1 else "")
                 meta = (f'<span class=meta>{run} &middot; {ago(c.get("updated", ""))}</span>')
-            why = ""
-            if concl == "failure" and slug in KNOWN_RED:
-                why = f'<span class=why>expected: {html.escape(KNOWN_RED[slug])}</span>'
-            tds.append(f'<td class=cell id="{slug}">{body}{meta}{why}</td>')
+            tds.append(f'<td class=cell id="{slug}">{body}{meta}{cell_notes(c, st, fixed)}</td>')
         rows.append("<tr>" + "".join(tds) + "</tr>")
 
     head = "".join(f"<th>{html.escape(l)}</th>" for _, l in targets)
-    repo = "con/eval-under"
+    repo = m.get("repo-slug", "con/eval-under")
     doc = f"""<!doctype html>
 <html lang=en>
 <meta charset=utf-8>
@@ -176,6 +242,11 @@ updated {ago(status.get('updated', ''))}</p>
 </tbody>
 </table>
 </div>
+<h2>Known issues</h2>
+<p class=sub>From <a href="https://github.com/{repo}/blob/master/.github/known-issues.yaml">.github/known-issues.yaml</a>.
+A cell whose failures are all covered here still shows as failing, but
+its CI job stays green; a failure none of these cover turns it red.</p>
+{"".join(render_issue(i, cells, repo) for i in ki["issues"])}
 <footer>
 Rows are backends (which filesystem), columns are targets (which suite).
 Each badge links to that cell's job log from the run that produced its

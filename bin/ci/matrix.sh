@@ -131,3 +131,11 @@ target_loop_size_mb() { echo "${_EU_LOOP_MB[$1]:-100}"; }
 # two. run-under.sh passes --no-root-squash for these.
 target_needs_root()      { [ "${_EU_NEEDS_ROOT[$1]:-0}" = 1 ]; }
 target_needs_git_annex() { [ "${_EU_NEEDS_GA[$1]:-0}" = 1 ]; }
+
+# Where a cell's machine-readable outputs go: suite.log and suite.rc
+# (run-under.sh), results.tsv (collect-results.py) and verdict.json
+# (known_issues.py check). On the runner's disk, not the mount, so they
+# survive teardown and can be uploaded.
+cell_output_dir() {
+    echo "${EVAL_UNDER_OUTPUT_DIR:-/tmp/eval-under-output/$(cell_slug "$1" "$2" "$3")}"
+}

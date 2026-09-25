@@ -29,6 +29,11 @@
 #   TMPDIR                         <mount> -- scratch files go under here
 #
 # Exit status: 0 if every stressor passed or skipped, 1 if any failed.
+#
+# Besides the human-readable summary, each stressor's verdict is printed
+# as a TAP line ("ok 3 - rename", "not ok 19 - utime # rc=2", "ok 20 -
+# xattr # SKIP rc=3") with the plan last. That is what
+# bin/ci/collect-results.py reads to report per-stressor results.
 
 set -uo pipefail
 
@@ -107,6 +112,14 @@ filter_opts() {
 }
 
 declare -a passed=() skipped=() failed=()
+tap_n=0
+
+# One TAP line per stressor, at column 0 so the collector can pick it out
+# of the interleaved stress-ng chatter.
+tap() {
+    tap_n=$((tap_n + 1))
+    echo "$1 $tap_n - $2"
+}
 
 run_one() {
     local name="$1" extra="$2" rc
@@ -115,6 +128,7 @@ run_one() {
     if ! supported_stressor "$name"; then
         echo "I: not in this stress-ng build; skipping"
         skipped+=("$name (not built)")
+        tap ok "$name # SKIP not in this stress-ng build"
         return 0
     fi
     # shellcheck disable=SC2086  # both are deliberate option lists
@@ -127,12 +141,12 @@ run_one() {
         $extra
     rc=$?
     case "$rc" in
-        0) passed+=("$name") ;;
+        0) passed+=("$name"); tap ok "$name" ;;
         # 3 = EXIT_NO_RESOURCE, 4 = EXIT_NOT_IMPLEMENTED. Both mean "this
         # filesystem/kernel cannot do it", which is information, not a
         # regression -- vfat has no xattrs and never will.
-        3|4) skipped+=("$name (rc=$rc)") ;;
-        *) failed+=("$name (rc=$rc)") ;;
+        3|4) skipped+=("$name (rc=$rc)"); tap ok "$name # SKIP rc=$rc" ;;
+        *) failed+=("$name (rc=$rc)"); tap "not ok" "$name # rc=$rc" ;;
     esac
 }
 
@@ -151,5 +165,6 @@ echo "=== stress-ng summary ($work) ==="
 printf 'passed  (%2d): %s\n' "${#passed[@]}"  "${passed[*]:-none}"
 printf 'skipped (%2d): %s\n' "${#skipped[@]}" "${skipped[*]:-none}"
 printf 'failed  (%2d): %s\n' "${#failed[@]}"  "${failed[*]:-none}"
+echo "1..$tap_n"
 
 [ "${#failed[@]}" -eq 0 ]

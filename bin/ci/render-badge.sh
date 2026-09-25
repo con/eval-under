@@ -19,10 +19,15 @@
 # and what a browser shows on hover.
 #
 # usage:
-#   bin/ci/render-badge.sh <status> [title]
+#   bin/ci/render-badge.sh <status> [title] [text]
 #
-#   status = success | failure | cancelled | skipped | <anything else>
+#   status = passing | failing-known | failing-new | incomplete
+#            (a cell's state, from bin/ci/known_issues.py), or a job
+#            conclusion: success | failure | cancelled | skipped;
+#            anything else renders as "unknown"
 #   title  = tooltip / accessible name (default: the status text)
+#   text   = badge text, overriding the status's default wording (e.g.
+#            "3 new failing"); the colour still follows <status>
 #
 # e.g.
 #   bin/ci/render-badge.sh success "BeeGFS 7.4.6 / git testsuite"
@@ -34,14 +39,21 @@ TITLE="${2:-}"
 
 # Colours match the shields.io "flat" palette so these sit comfortably
 # next to any conventional badge elsewhere in the README.
+# Known failures are still red: the badge reports what the filesystem
+# did, not whether we expected it. New failures get the stronger red,
+# and a run that did not complete is orange -- it measured nothing.
 case "$STATUS" in
-    success)   text="passing";   color="#4c1" ;;
-    failure)   text="failing";   color="#e05d44" ;;
+    success|passing) text="passing";         color="#4c1" ;;
+    failure)         text="failing";         color="#e05d44" ;;
+    failing-known)   text="failing (known)"; color="#e05d44" ;;
+    failing-new)     text="new failures";    color="#b60205" ;;
+    incomplete)      text="incomplete";      color="#fe7d37" ;;
     cancelled) text="cancelled"; color="#9f9f9f" ;;
     skipped)   text="skipped";   color="#9f9f9f" ;;
     *)         text="unknown";   color="#9f9f9f" ;;
 esac
 
+[ -z "${3:-}" ] || text="$3"
 [ -n "$TITLE" ] || TITLE="$text"
 
 # Width: DejaVu Sans at 11px averages just under 7px/char for lowercase

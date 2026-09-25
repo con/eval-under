@@ -46,7 +46,8 @@ cell's own job log** via the [status page](https://con.github.io/eval-under/) --
 GitHub has no stable URL for "the latest job of this matrix cell", so
 the page's `#<cell>` anchor supplies the indirection. The page also
 carries what a badge cannot: which run produced the result, how long
-ago, and why a cell is red on purpose.
+ago, which known issues a red cell's failures fall under, and which
+failures are new.
 
 State lives in
 [`status.json`](../../blob/gh-pages/status.json) on that branch and is
@@ -59,8 +60,45 @@ the table.
 A red cell is not automatically a bug: vfat has no symlinks, ownership,
 or xattrs, and NFS has its own locking and close-to-open rules. The
 matrix exists to make *which* filesystem breaks *which* layer visible at
-a glance. [GOTCHAS.md](GOTCHAS.md) lists the cells that are red for a
-known reason, with the reason.
+a glance.
+
+### Known issues: green jobs, honest badges
+
+Failures that are already understood are listed, per test, in
+[`.github/known-issues.yaml`](.github/known-issues.yaml): which cells
+(backend globs x targets), which tests, a kind-of-cause tag
+(`fs-limitation`, `fs-divergence`, `test-assumption`, `build-config`,
+`harness`, `fixed-upstream`, ...), and links to the evidence. Each cell
+is then judged twice:
+
+| Cell outcome | CI job | Badge |
+| --- | --- | --- |
+| all tests pass | green | `passing` |
+| every failure covered by a known issue | **green** | `failing (known)` (still red) |
+| any failure no issue covers | **red** | `N new failing` |
+| suite timed out, died, or its totals disagree with the parse | **red** | `incomplete` |
+| a known issue's tests all pass | green, annotated | `+N fixed?` appended |
+
+So CI stays green for what we know is broken, yet still catches a new
+failure inside an already-red cell -- and notices when an upstream fix
+(say, a new git-annex daily build) makes a known issue go away.
+
+This needs per-test results, which `bin/ci/collect-results.py` derives
+from what each suite already emits: TAP for `git`, `pjdfstest` and our
+`stress-ng` driver, tasty's console tree for `git annex test` (upstream
+TODO for a TAP log:
+[provide TAP protocol logging for 'annex test'](https://git-annex.branchable.com/todo/provide_TAP_protocol_logging_for___39__annex_test__39__/)).
+Each parse is cross-checked against the suite's own totals, and a
+mismatch marks the cell incomplete (red) rather than quietly dropping
+failures. An issue can also cover a whole cell (`tests: ["*"]`) -- the
+coarse mode for failures not yet narrowed down, flagged as such on the
+status page.
+
+The "Known issues" section of [GOTCHAS.md](GOTCHAS.md) is generated
+from the same file (`bin/ci/known_issues.py gotchas`); CI fails if it
+goes stale. To triage a new failure, `bin/ci/known_issues.py draft
+<verdict.json>` prints issue stubs from a cell's `verdict.json` (in its
+`logs-*` artifact).
 
 ## Test targets
 
@@ -188,6 +226,10 @@ that was already there is only unmounted on teardown, never removed.
 | `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
 | `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
+| `.github/known-issues.yaml`              | Known failures per cell and test: what keeps a job green and a badge honest        |
+| `bin/ci/collect-results.py`              | Turns a suite's output (TAP / tasty) into per-test `results.tsv`                   |
+| `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
+| `bin/ci/check-cell.sh`                   | Runs those two for one cell; its exit status is the job's verdict                  |
 | `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                       |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
@@ -265,8 +307,12 @@ filesystem testing.
    filesystem under test. Pin any upstream checkout to a tag.
 3. Add an entry to `targets:` in `.github/matrix.yaml` with its `label`,
    `timeout`, `loop-size-mb`, `needs-root`, and `needs-git-annex`.
-4. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.
-5. `shellcheck bin/ci/*.sh bin/eval-under*` before committing.
+4. Teach `bin/ci/collect-results.py` to turn its output into per-test
+   results. Prefer a suite that speaks TAP (or JUnit), and cross-check
+   the parse against the suite's own totals; without an adapter every
+   cell of the new column reports `incomplete`.
+5. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.
+6. `shellcheck bin/ci/*.sh bin/eval-under*` before committing.
 
 ## Upstream targets
 

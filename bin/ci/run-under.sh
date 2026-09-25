@@ -23,6 +23,12 @@
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
 #   EVAL_UNDER_LOOP_SIZE_MB    loop backing image size
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built the suites
+#   EVAL_UNDER_OUTPUT_DIR      where to keep suite.log / suite.rc
+#                              (default: /tmp/eval-under-output/<cell>)
+#
+# Exits with the suite's own status. The combined output is also kept in
+# <output-dir>/suite.log and the status in suite.rc, for
+# bin/ci/check-cell.sh to judge against .github/known-issues.yaml.
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -67,8 +73,23 @@ runner="$here/target-$TARGET.sh"
 
 echo "I: $(target_label "$TARGET") under $BACKEND/$VERSION (timeout ${TIMEOUT}s)"
 
+out="$(cell_output_dir "$BACKEND" "$VERSION" "$TARGET")"
+mkdir -p "$out"
+rm -f "$out/suite.rc" "$out/results.tsv" "$out/verdict.json"
+
 # Sudo is expected to be in place already (workflow uses `sudo -E`); the
 # script itself just forwards. The timeout keeps a runaway suite from
 # hitting the workflow-level timeout with no signal of its own.
-exec "$here/../eval-under" "$BACKEND" "${opts[@]}" --set-home -- \
-    timeout "$TIMEOUT" "$runner"
+set +e
+"$here/../eval-under" "$BACKEND" "${opts[@]}" --set-home -- \
+    timeout "$TIMEOUT" "$runner" 2>&1 | tee "$out/suite.log"
+rc=${PIPESTATUS[0]}
+set -e
+echo "$rc" > "$out/suite.rc"
+
+# We run under sudo, but the checker that reads and adds to these runs
+# as the invoking user.
+if [ -n "${SUDO_UID:-}" ]; then
+    chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$out"
+fi
+exit "$rc"

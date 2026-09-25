@@ -18,12 +18,14 @@ on:
       - "bin/**"
       - "provision/**"
       - ".github/matrix.yaml"
+      - ".github/known-issues.yaml"
       - ".github/workflows/test.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "provision/**"
       - ".github/matrix.yaml"
+      - ".github/known-issues.yaml"
       - ".github/workflows/test.yaml"
   workflow_dispatch:
   schedule:
@@ -40,6 +42,10 @@ jobs:
       cells: ${{ steps.cells.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+      # Fail fast on a typo'd backend/target/tag, or a GOTCHAS.md whose
+      # generated section no longer matches the YAML.
+      - name: Validate known issues
+        run: bin/ci/known_issues.py validate --gotchas
       - id: cells
         run: echo "matrix=$(bin/ci/matrix-json.sh)" >> "$GITHUB_OUTPUT"
 
@@ -80,15 +86,28 @@ jobs:
           git config --global user.email test@github.land
           git config --global user.name  "GitHub Almighty"
 
+      # The suite's own exit status does not decide the job: known failures
+      # are expected. The "Check against known issues" step below does.
       - name: Run ${{ matrix.target }} under ${{ matrix.backend }}
+        id: suite
+        continue-on-error: true
         run: >-
           sudo -E bin/ci/run-under.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
       - name: Dump failure logs
-        if: failure()
+        if: always() && steps.suite.outcome == 'failure'
         run: >-
           bin/ci/dump-failure-logs.sh
+          "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
+
+      # Green if every failure is covered by .github/known-issues.yaml; red
+      # on a new failure or a run that did not complete. The badge on the
+      # status page reports the failures either way.
+      - name: Check against known issues
+        if: always()
+        run: >-
+          bin/ci/check-cell.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
       - name: Upload logs
@@ -99,23 +118,26 @@ jobs:
           path: |
             /var/log/beegfs-*
             /opt/eval-under-src/git/t/test-results/**
+            /tmp/eval-under-output/${{ matrix.slug }}/**
           if-no-files-found: ignore
 
       # One tiny artifact per cell, read back by the `badges` job. A
       # matrix job cannot contribute to a `needs.*.outputs` map, so this
       # is how a fan-out reports 20 individual verdicts to a fan-in.
+      # verdict.json carries what the report shows (state, counts, which
+      # known issues reproduced); `conclusion` is the job's verdict.
       - name: Record cell result
         if: always()
         run: |
-          mkdir -p result
-          echo "${{ job.status }}" > result/conclusion
+          mkdir -p result && echo "${{ job.status }}" > result/conclusion
+          cp /tmp/eval-under-output/${{ matrix.slug }}/verdict.json result/ || true
 
       - name: Upload cell result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.slug }}
-          path: result/conclusion
+          path: result/
 
   publish:
     needs: test
