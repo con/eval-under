@@ -151,6 +151,9 @@ sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 # Discover backends / read backend help
 bin/eval-under --list
 bin/eval-under nfs --help
+
+# Version
+bin/eval-under --version        # -> eval-under 0.1.0-4-g1a2b3c4
 ```
 
 All backends accept `--mount-point`, `--set-home`, `--keep`, and their
@@ -170,6 +173,12 @@ So concurrent runs don't collide, nothing has to pre-exist under `/mnt`,
 and a leftover mount from `--keep` says which run left it. An explicit
 `--mount-point` still pins the mount wherever you want it; a directory
 that was already there is only unmounted on teardown, never removed.
+
+`--version` (`-V`) reports `git describe --tags --always --dirty` when
+run from a checkout -- so `0.1.0` on a release tag, `0.1.0-4-g1a2b3c4`
+four commits past it, and a `-dirty` suffix for uncommitted changes. An
+installed copy outside a checkout reports the `VERSION_FALLBACK` baked
+into `bin/eval-under`, bumped with each release tag.
 
 ## File layout
 
@@ -193,7 +202,11 @@ that was already there is only unmounted on teardown, never removed.
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
 | `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
+| `bin/ci/run-checks.sh`                   | The repo's own checks: shellcheck over every script, then the bats suite           |
+| `bin/ci/install-check-deps.sh`           | Runner-side apt step for those two (`shellcheck`, `bats`)                          |
+| `tests/eval-under.bats`                  | CLI entry point: options, backend discovery, dispatch, `--version`                 |
 | `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
+| `.github/workflows/checks.yaml`          | shellcheck + bats on every push and PR; minutes, no root, no mount                 |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)
@@ -232,6 +245,42 @@ vagrant ssh -c 'cd /vagrant && act -j test'
 flow but cannot exercise the BeeGFS kernel module or the host's NFS
 server -- useful for shaking out workflow bugs, not for actual
 filesystem testing.
+
+## Tests
+
+Two layers, deliberately separate:
+
+- **`tests/*.bats`** -- the `eval-under` CLI itself: option handling,
+  backend discovery, dispatch, `--version`. Unprivileged, mounts
+  nothing, runs in about a second. The dispatcher is exercised against
+  throwaway trees of *stub* backends, so adding a real backend does not
+  mean rewriting the suite.
+- **the CI matrix** (`.github/workflows/test.yaml`) -- the backends'
+  actual mount and teardown logic, by running upstream suites under
+  them. Needs root, a kernel module and a live cluster; that is what the
+  badge grid at the top reports.
+
+```bash
+# Both checks, exactly what .github/workflows/checks.yaml runs:
+bin/ci/run-checks.sh
+
+# Or one at a time:
+bin/ci/run-checks.sh shellcheck
+bin/ci/run-checks.sh bats
+
+# Or bats directly, when you want its own flags:
+bats tests/
+bats --filter version tests/
+```
+
+`apt-get install shellcheck bats` is the whole setup -- plain
+bats-core, no `bats-assert` / `bats-support` submodules to vendor. The
+Vagrant VM installs both, and `bin/ci/install-check-deps.sh` is the
+runner-side equivalent.
+
+A `--version` caveat worth knowing when a check fails only in CI:
+`git describe` needs tags, and `actions/checkout` fetches none by
+default, which is why the checks workflow asks for `fetch-depth: 0`.
 
 ## Adding a new backend
 
