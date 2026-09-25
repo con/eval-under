@@ -79,6 +79,27 @@ targets:
     needs-root: true
     needs-git-annex: false
 
+  # No suite to install: a few hundred write/stat/copy/stat rounds,
+  # asking whether the filesystem keeps an unmodified file's stat data
+  # stable. Fast, and the one cell that distinguishes "the filesystem
+  # lied" from "the application is wrong" -- see con/git-annex#293.
+  - name: mtime-stability
+    label: mtime stability
+    timeout: 600
+    loop-size-mb: 100
+    needs-root: false
+    needs-git-annex: false
+
+  # The git-annex half of the same question: loops unlock / unlocked
+  # add and reports a failure rate instead of a pass/fail of the whole
+  # `git annex test` suite.
+  - name: git-annex-linkannex
+    label: git-annex linkAnnex loop
+    timeout: 1200
+    loop-size-mb: 100
+    needs-root: false
+    needs-git-annex: true
+
   # ~8500 assertions, run serially; ext4 does it in minutes but a
   # sync-heavy NFS or BeeGFS mount is an order of magnitude slower.
   - name: pjdfstest
