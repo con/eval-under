@@ -272,8 +272,9 @@ on a stock runner in under a minute.
   one measured that breaks a documented git-annex operation outright
   (any unlocked `git annex add`, via invisible hardlinks -- including but
   not limited to an adjusted unlocked branch), *and*
-  it is the only one with a one-second clock. Backend implemented --
-  `bin/eval-under-sshfs`.
+  it is the only one with a one-second clock. Backend implemented in a
+  separate change (`bin/eval-under-sshfs`); the measurements above come
+  from `bin/ci/probe-backend.sh`, which mounts sshfs itself.
 - **`loop --fs exfat`**, the crippled row that is *not* vfat: it also
   rejects `:`, `*` and `?` in filenames, which vfat-with-defaults does
   not surface, and it is what is on every USB drive.

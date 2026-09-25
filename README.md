@@ -150,14 +150,6 @@ sudo bin/eval-under loop --fs xfs --size 200 --set-home -- \
 # the fsync-heavy slow path)
 sudo bin/eval-under nfs --set-home -- bash -c 'cd "$HOME" && git annex test'
 
-# Under sshfs, with the attribute cache off
-sudo bin/eval-under sshfs --no-cache --set-home -- \
-  bash -c 'cd "$HOME" && git annex test'
-
-# ...or against the reporter's own server, with their mount options
-sudo bin/eval-under sshfs --host store.example.org --remote-dir /data/scratch \
-  --workaround rename --set-home -- git annex fsck
-
 # Skip teardown to poke around after a failure
 sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 
@@ -204,7 +196,7 @@ Start with the capability profile -- seconds, and it usually explains
 the failure before a suite is worth starting:
 
 ```bash
-sudo bin/eval-under sshfs --set-home -- bin/ci/fs-capabilities.sh
+sudo bin/eval-under nfs --set-home -- bin/ci/fs-capabilities.sh
 ```
 
 Every line it prints maps to a class of reported bug (`sqlite-wal=no` ->
@@ -215,12 +207,12 @@ See FILESYSTEMS.md for which report each one came from.
 Then run the suite under the same backend:
 
 ```bash
-sudo bin/ci/run-under.sh sshfs n/a git-annex
+sudo bin/ci/run-under.sh nfs n/a git-annex
 ```
 
 In CI, the **Reproduce (on demand)** workflow is the same thing from the
 Actions tab: pick the backend, version, target, runner image, and any
-backend flags (`--no-cache --workaround rename`, `--sync`, ...). It has
+backend flags (`--sync`, `--no-root-squash`, ...). It has
 no badge and no schedule -- it exists to be run at someone, once.
 
 Targets available there include `capabilities`, which is not a matrix
@@ -235,7 +227,6 @@ any backend.
 | `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                                   |
 | `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
 | `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
-| `bin/eval-under-sshfs`                   | sshfs backend (throwaway loopback sshd, or a remote you name)                      |
 | `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
