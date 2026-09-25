@@ -23,10 +23,27 @@ A sparse backing image is `dd`'d, `mkfs.<fs>`'d, and loop-mounted.
 
 | Knob | Value | Why |
 | --- | --- | --- |
-| `mkfs` options | none -- distro defaults | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. |
-| Image size | per target, `target_loop_size_mb()` in `bin/ci/matrix.sh` | `git annex test` needs room for many small objects; the other three do not. |
+| `mkfs` options | none -- distro defaults -- **except** the filesystems below | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. |
+| `mkfs.gfs2` | `-O -p lock_nolock -j 1 -J 8` | `lock_nolock` is GFS2's single-node lock module: no dlm, no corosync, no pacemaker. One journal because one node mounts it; `-J 8` because the 128MB default journal does not fit in a test-sized image. |
+| `mkfs.ocfs2` | `-F -M local -N 1 -b 4K -C 8K --fs-features=local -q` | `-M local` is OCFS2's equivalent: a local mount needs no o2cb cluster stack. |
+| Image size | per target, `target_loop_size_mb()` in `bin/ci/matrix.sh`, raised to a per-filesystem floor | `git annex test` needs room for many small objects; the other three do not. a *default* `mkfs.gfs2` wants a 128MB journal, which will not fit in a 100MB image. With this backend's `-J 8` it does fit -- measured -- but 100MB then leaves `git annex test` almost no room, so gfs2 and ocfs2 are floored at 256MB (and btrfs at 120MB). The floor is applied unconditionally and logged: `run-under.sh` always passes a `--size` chosen for the target, and no caller knows every filesystem's journal overhead. |
 | Mount (vfat, msdos, exfat, ntfs) | `-o uid=<invoker>,gid=<invoker>` | These filesystems store no ownership. Without `uid=`, everything belongs to root and an unprivileged wrapped command cannot write. |
+| Mount (gfs2) | `-t gfs2 -o lockproto=lock_nolock`, then `chown` | Named again at mount time so an image labelled for a cluster still mounts single-node. |
 | Mount (everything else) | plain `mount`, then `chown <invoker>` on the mountpoint | ext4/xfs/btrfs carry real ownership; setting it once on the root is enough. |
+
+**Single-node cluster filesystems are a deliberate approximation.** The
+two vendors say different things about it, and neither says quite what an
+earlier revision of this file claimed ("development-and-test-only"): Red
+Hat does not support GFS2 as a single-node filesystem *at all*, outside
+backup / secondary-site DR and existing single-node customers, and points
+at a local filesystem instead; Oracle documents a local OCFS2 mount as a
+supported configuration you can later migrate into a cluster, not as a
+test-only mode. Either way, neither mode exercises the distributed lock
+manager -- which is exactly the part a real GFS2 or OCFS2 deployment
+would stress. What the row *does* buy is a cluster filesystem's on-disk
+and VFS behaviour under git-annex, at loop-device cost. Read a green
+cell as "nothing here is broken by the filesystem itself", not as "GFS2
+is fine in a cluster".
 
 **The vfat consequence worth knowing.** `fmask`, `dmask` and `umask` are
 left at kernel defaults, so every file on the mount reads as mode `0755`

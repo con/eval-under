@@ -14,6 +14,11 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 `bin/eval-under-<name>` scripts, new suites as `bin/ci/target-<name>.sh`
 (see below).
 
+> **Which filesystem should be next?** [FILESYSTEMS.md](FILESYSTEMS.md)
+> surveys the filesystems with documented git-annex / DataLad breakage
+> against what can actually be stood up in CI -- the second half
+> measured, not guessed, by the *Probe candidate filesystems* workflow.
+>
 > **Read [GOTCHAS.md](GOTCHAS.md) before drawing conclusions from a red
 > cell.** It records the exact mkfs / mount / export settings each
 > backend uses -- results only mean something relative to those -- and
@@ -180,6 +185,40 @@ four commits past it, and a `-dirty` suffix for uncommitted changes. An
 installed copy outside a checkout reports the `VERSION_FALLBACK` baked
 into `bin/eval-under`, bumped with each release tag.
 
+## Reproducing a report
+
+The scheduled matrix answers "is this filesystem broken?" for the five
+backends it covers. Support needs the other question answered: someone
+reports a problem on a filesystem, possibly one with no cell, and you
+want that combination running now with *their* mount options.
+
+Start with the capability profile -- seconds, and it usually explains
+the failure before a suite is worth starting:
+
+```bash
+sudo bin/eval-under nfs --set-home -- bin/ci/fs-capabilities.sh
+```
+
+Every line it prints maps to a class of reported bug (`sqlite-wal=no` ->
+"SQLite3 returned ErrorIO"; `fcntl-lock=no` -> git-annex falls back to
+`annex.pidlock`; `symlink=no` -> crippled filesystem, adjusted branch).
+See FILESYSTEMS.md for which report each one came from.
+
+Then run the suite under the same backend:
+
+```bash
+sudo bin/ci/run-under.sh nfs n/a git-annex
+```
+
+In CI, the **Reproduce (on demand)** workflow is the same thing from the
+Actions tab: pick the backend, version, target, runner image, and any
+backend flags (`--sync`, `--no-root-squash`, ...). It has
+no badge and no schedule -- it exists to be run at someone, once.
+
+Targets available there include `capabilities`, which is not a matrix
+column: it is the fast triage step above, wrapped so it can run under
+any backend.
+
 ## File layout
 
 | Path                                     | Purpose                                                                            |
@@ -207,6 +246,12 @@ into `bin/eval-under`, bumped with each release tag.
 | `tests/eval-under.bats`                  | CLI entry point: options, backend discovery, dispatch, `--version`                 |
 | `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
 | `.github/workflows/checks.yaml`          | shellcheck + bats on every push and PR; minutes, no root, no mount                 |
+| `.github/workflows/reproduce.yaml`       | On-demand run of any backend x target, for support (no badge, no schedule)         |
+| `FILESYSTEMS.md`                         | Survey: reported git-annex / DataLad breakage vs. what can be bootstrapped here    |
+| `bin/ci/probe-backend.sh`                | Reconnaissance: try to stand up a candidate filesystem here, report what it got    |
+| `bin/ci/fs-capabilities.sh`              | What a mounted filesystem supports, in the dimensions git-annex trips over         |
+| `.github/workflows/probe-filesystems.yaml` | Runs those probes; a roll-up job renders the whole table                         |
+| `bin/ci/render-probe-table.sh`           | Rolls those probe summaries up into the one table the workflow prints              |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)

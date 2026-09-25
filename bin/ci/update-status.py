@@ -56,7 +56,10 @@ def matrix_cells(matrix_file: Path) -> dict[str, dict]:
     cells = {}
     for b in d["backends"]:
         bslug = b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}"
-        for t in d["targets"]:
+        # Skip on-demand targets: they are runnable but are not matrix
+        # cells, so they have no scheduled run to have a status for.
+        # Without this they land here as permanently-"unknown" entries.
+        for t in (t for t in d["targets"] if not t.get("on-demand")):
             slug = f"{bslug}-{t['name']}"
             cells[slug] = {
                 "backend": b["backend"],

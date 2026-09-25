@@ -23,6 +23,9 @@
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
 #   EVAL_UNDER_LOOP_SIZE_MB    loop backing image size
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built the suites
+#   EVAL_UNDER_BACKEND_OPTS    extra backend flags, word-split (e.g.
+#                              "--no-cache --workaround rename"). Used by
+#                              the on-demand reproduce workflow.
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -39,7 +42,8 @@ VERSION="${2:?version required}"
 TARGET="${3:-git-annex}"
 
 target_known "$TARGET" || {
-    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]})" >&2
+    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]}" \
+         "${EVAL_UNDER_ONDEMAND_TARGETS[*]})" >&2
     exit 1
 }
 
@@ -61,6 +65,13 @@ case "$BACKEND" in
             target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
+
+# Caller-supplied backend flags, deliberately word-split: this is how the
+# reproduce workflow passes a reporter's exact mount options through.
+if [ -n "${EVAL_UNDER_BACKEND_OPTS:-}" ]; then
+    # shellcheck disable=SC2206  # word-splitting is the point
+    opts+=(${EVAL_UNDER_BACKEND_OPTS})
+fi
 
 runner="$here/target-$TARGET.sh"
 [ -x "$runner" ] || { echo "no target runner at $runner" >&2; exit 1; }
