@@ -5,9 +5,9 @@
 # Generated with Claude Code
 #
 # Known issues: the single source of truth for "this cell is red, and we
-# know why". Reads .github/known-issues.yaml and
+# know why". Reads evals/known-issues.yaml and
 #
-#   validate   checks it against .github/matrix.yaml (and, with
+#   validate   checks it against evals/matrix.yaml (and, with
 #              --gotchas, that GOTCHAS.md's generated section is current)
 #   check      classifies one cell's per-test results against it and sets
 #              the job's verdict: known failures keep the job green, new
@@ -42,8 +42,8 @@
 # workflow commands.
 #
 # env:
-#   EVAL_UNDER_MATRIX_FILE         (default: .github/matrix.yaml)
-#   EVAL_UNDER_KNOWN_ISSUES_FILE   (default: .github/known-issues.yaml)
+#   EVAL_UNDER_MATRIX_FILE         (default: evals/matrix.yaml)
+#   EVAL_UNDER_KNOWN_ISSUES_FILE   (default: evals/known-issues.yaml)
 
 from __future__ import annotations
 
@@ -58,9 +58,9 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-MATRIX_FILE = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / ".github/matrix.yaml"))
+MATRIX_FILE = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / "evals/matrix.yaml"))
 ISSUES_FILE = Path(os.environ.get("EVAL_UNDER_KNOWN_ISSUES_FILE",
-                                  ROOT / ".github/known-issues.yaml"))
+                                  ROOT / "evals/known-issues.yaml"))
 GOTCHAS_FILE = ROOT / "GOTCHAS.md"
 
 EXPECT = ("fail", "flaky")
@@ -106,6 +106,8 @@ def expand(patterns: list[str]) -> list[str]:
             continue
         for part in re.split(r"\s*,\s*", m.group("r")):
             a, _, b = part.partition("-")
+            if int(b or a) < int(a):
+                raise ValueError(f"reversed range {part!r} in {p!r}")
             out += [f"{m.group('pre')}{n}" for n in range(int(a), int(b or a) + 1)]
     return out
 
@@ -119,7 +121,10 @@ def load(path: Path = ISSUES_FILE) -> dict:
         issue.setdefault("expect", "fail")
         issue.setdefault("tags", [])
         issue.setdefault("links", [])
-        issue["_tests"] = expand(issue.get("tests") or [])
+        try:
+            issue["_tests"] = expand(issue.get("tests") or [])
+        except ValueError as e:
+            issue["_tests"], issue["_error"] = [], str(e)
     return d
 
 
@@ -150,6 +155,8 @@ def validate(d: dict, m: dict) -> list[str]:
             seen.add(iid)
         for k in sorted(k for k in set(issue) - allowed if not k.startswith("_")):
             errs.append(f"{where}: unknown field {k!r}")
+        if issue.get("_error"):
+            errs.append(f"{where}: tests: {issue['_error']}")
         if not issue.get("title"):
             errs.append(f"{where}: title is required")
         for field in ("backends", "targets", "tests", "links"):
@@ -192,6 +199,11 @@ def cells_of(issue: dict, m: dict) -> list[str]:
 # --------------------------------------------------------------------------
 # check
 
+# `# key: value` -- and only that, so a test id that happens to start
+# with "#" is still read as a result.
+HEADER = re.compile(r"^# (?P<k>[a-z][a-z-]*): ?(?P<v>.*)$")
+
+
 def read_results(path: Path) -> tuple[dict[str, str], list[tuple[str, str, str]]]:
     """(header, rows). A missing file reads as an incomplete, empty result."""
     header: dict[str, str] = {}
@@ -201,9 +213,9 @@ def read_results(path: Path) -> tuple[dict[str, str], list[tuple[str, str, str]]
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
-        if line.startswith("#"):
-            k, _, v = line[1:].partition(":")
-            header[k.strip()] = v.strip()
+        m = HEADER.match(line)
+        if m:
+            header[m.group("k")] = m.group("v").strip()
             continue
         parts = line.split("\t")
         tid, outcome = parts[0], parts[1] if len(parts) > 1 else ""
@@ -418,7 +430,7 @@ def md_link(link: str) -> str:
 
 def render_gotchas(d: dict, m: dict) -> str:
     out = [GOTCHAS_BEGIN, "",
-           "Generated from [`.github/known-issues.yaml`](.github/known-issues.yaml);",
+           "Generated from [`evals/known-issues.yaml`](evals/known-issues.yaml);",
            "edit that file, then run `bin/ci/known_issues.py gotchas`.", "",
            "| Tag | Meaning |", "| --- | --- |"]
     out += [f"| `{t}` | {desc} |" for t, desc in d["tags"].items()]
@@ -499,7 +511,7 @@ def cmd_draft(a) -> int:
         cell, bslug, target = v["cell"], v["backend_slug"], v["target"]
         more = v["counts"]["new_fail"] - len(v["new_failures"])
         stubs.append({
-            "id": f"{cell}-todo",
+            "id": re.sub(r"[^a-z0-9-]+", "-", f"{cell}-todo".lower()),
             "title": "TODO: root cause",
             "backends": [bslug],
             "targets": [target],

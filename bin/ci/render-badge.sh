@@ -56,6 +56,11 @@ esac
 [ -z "${3:-}" ] || text="$3"
 [ -n "$TITLE" ] || TITLE="$text"
 
+xml_escape() {
+    printf '%s' "$1" \
+        | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
 # Width: DejaVu Sans at 11px averages just under 7px/char for lowercase
 # ASCII, plus 5px padding either side. Approximate is fine -- the text
 # is centred, so a few px of slack shows up as symmetric padding rather
@@ -65,8 +70,8 @@ mid=$(( width * 5 ))   # centre, in the 10x-scaled text coordinate space
 
 # XML-escape the title: cell labels are plain ASCII today, but a future
 # backend label with an "&" in it should not emit invalid SVG.
-esc_title=$(printf '%s' "$TITLE" \
-    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g')
+esc_title=$(xml_escape "$TITLE")
+text=$(xml_escape "$text")
 
 cat <<EOF
 <svg xmlns="http://www.w3.org/2000/svg" width="$width" height="20" role="img" aria-label="$esc_title: $text">

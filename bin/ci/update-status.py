@@ -36,7 +36,7 @@
 #
 # env:
 #   GITHUB_RUN_ID, GITHUB_RUN_NUMBER, GITHUB_RUN_ATTEMPT, GITHUB_SHA
-#   EVAL_UNDER_MATRIX_FILE   (default: .github/matrix.yaml)
+#   EVAL_UNDER_MATRIX_FILE   (default: evals/matrix.yaml)
 
 from __future__ import annotations
 
@@ -174,7 +174,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=Path, default=None)
     args = ap.parse_args()
 
-    matrix_file = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / ".github/matrix.yaml"))
+    matrix_file = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / "evals/matrix.yaml"))
     cells = matrix_cells(matrix_file)
 
     run_id = env_int("GITHUB_RUN_ID", 0)

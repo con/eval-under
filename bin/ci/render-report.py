@@ -15,7 +15,7 @@
 # same shape as con/git-annex's con.github.io/git-annex-ci-reports.
 #
 # It also carries what a badge cannot: which run, how long ago, which
-# known issues (.github/known-issues.yaml) a red cell's failures fall
+# known issues (evals/known-issues.yaml) a red cell's failures fall
 # under, and which failures are new.
 #
 # usage:
@@ -112,10 +112,10 @@ def cell_notes(c: dict, st: str, fixed: list[str]) -> str:
     for iid, e in c.get("issues", {}).items():
         if e.get("status") == "reproduced":
             n = e.get("fail", 0)
-            out.append(f'<span class=why>known: <a href="#{iid}">{iid}</a>'
+            out.append(f'<span class=why>known: <a href="#issue-{iid}">{iid}</a>'
                        f' ({n} test{"s" if n != 1 else ""})</span>')
     for iid in fixed:
-        out.append(f'<span class="why fixed">not reproduced: <a href="#{iid}">{iid}</a> '
+        out.append(f'<span class="why fixed">not reproduced: <a href="#issue-{iid}">{iid}</a> '
                    f'&mdash; fixed?</span>')
     return "".join(out)
 
@@ -137,7 +137,7 @@ def render_issue(i: dict, cells: dict, repo: str) -> str:
     links = ", ".join(f'<a href="{html.escape(href(l))}">{html.escape(l)}</a>' for l in i["links"])
     notes = f"<p>{code(i['notes'].strip())}</p>" if i.get("notes") else ""
     fixed_in = (f" &middot; fixed in {html.escape(i['fixed-in'])}" if i.get("fixed-in") else "")
-    return (f'<div class=issue id="{i["id"]}"><h3><code>{i["id"]}</code>: '
+    return (f'<div class=issue id="issue-{i["id"]}"><h3><code>{i["id"]}</code>: '
             f'{html.escape(i["title"])}</h3>{tags}'
             f'<span class=meta>expect {i["expect"]} &middot; {scope}{fixed_in}</span>'
             f'<span class=meta>{"; ".join(where) or "no cell has reported on it yet"}</span>'
@@ -169,7 +169,7 @@ def main() -> int:
 
     # Preserve matrix order rather than sorting: the page should read like
     # the README grid.
-    with (ROOT / ".github/matrix.yaml").open() as fh:
+    with (ROOT / "evals/matrix.yaml").open() as fh:
         import yaml
         m = yaml.safe_load(fh)
     backends = [(b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}",
@@ -183,7 +183,11 @@ def main() -> int:
         return c.get("state") or c.get("conclusion", "unknown")
 
     npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
-    nnew = sum(1 for c in cells.values() if state(c) in ("failing-new", "incomplete"))
+    # Anything that is neither passing nor fully covered by known issues --
+    # new failures, incomplete runs, and cells last run before verdicts
+    # existed (a bare "failure") -- is unexpected until shown otherwise.
+    nnew = sum(1 for c in cells.values()
+               if state(c) not in ("passing", "success", "failing-known"))
     total = len(cells)
     overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
     render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
@@ -243,7 +247,7 @@ updated {ago(status.get('updated', ''))}</p>
 </table>
 </div>
 <h2>Known issues</h2>
-<p class=sub>From <a href="https://github.com/{repo}/blob/master/.github/known-issues.yaml">.github/known-issues.yaml</a>.
+<p class=sub>From <a href="https://github.com/{repo}/blob/master/evals/known-issues.yaml">evals/known-issues.yaml</a>.
 A cell whose failures are all covered here still shows as failing, but
 its CI job stays green; a failure none of these cover turns it red.</p>
 {"".join(render_issue(i, cells, repo) for i in ki["issues"])}

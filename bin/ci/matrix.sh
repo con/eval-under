@@ -8,7 +8,7 @@
 # bin/ci/{install-target,run-under,target-*,matrix-json,...}.sh.
 #
 # This file used to *hold* the matrix. It now *reads* it, from
-# .github/matrix.yaml -- so the workflow and these scripts cannot drift
+# evals/matrix.yaml -- so the workflow and these scripts cannot drift
 # apart, because both parse the same file. Everything here is accessors
 # over that data plus the naming rules.
 #
@@ -17,7 +17,7 @@
 # Repo root, resolved from this file's location so callers can be run
 # from anywhere (CI checks out to a different path than the Vagrant VM).
 EVAL_UNDER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EVAL_UNDER_MATRIX_FILE="${EVAL_UNDER_MATRIX_FILE:-$EVAL_UNDER_ROOT/.github/matrix.yaml}"
+EVAL_UNDER_MATRIX_FILE="${EVAL_UNDER_MATRIX_FILE:-$EVAL_UNDER_ROOT/evals/matrix.yaml}"
 
 [ -r "$EVAL_UNDER_MATRIX_FILE" ] || {
     echo "matrix.sh: cannot read $EVAL_UNDER_MATRIX_FILE" >&2

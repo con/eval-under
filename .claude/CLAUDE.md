@@ -41,8 +41,9 @@ from the workflow. Rationale:
    and prefer `apt-get -o DPkg::Lock::Timeout=60 ...` to survive the
    post-boot `unattended-upgrades` dpkg-lock window on ubuntu-22.04
    runners.
-3. Scripts pass `shellcheck` cleanly. Run `shellcheck bin/ci/*.sh
-   bin/eval-under*` before committing. If a warning is a genuine
+3. Scripts pass `shellcheck` cleanly. Run `bin/ci/shellcheck.sh`
+   (every tracked file with a sh/bash shebang -- the same check the
+   Shellcheck workflow runs) before committing. If a warning is a genuine
    false positive, silence with a targeted `# shellcheck disable=SCxxxx`
    annotation and a one-line comment explaining why -- do not blanket-
    suppress at file scope.

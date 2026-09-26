@@ -4,7 +4,7 @@
 #
 # Generated with Claude Code
 #
-# Regenerate the README's CI matrix table from .github/matrix.yaml.
+# Regenerate the README's CI matrix table from evals/matrix.yaml.
 #
 # Replaces the old gen-dispatchers.sh, which also had to emit 20
 # near-identical workflow files -- one per cell, purely so that each cell

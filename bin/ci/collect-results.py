@@ -104,12 +104,19 @@ class TapFile:
         m = TAP_LINE.match(line)
         if m:
             n = int(m.group("num"))
-            if n in self.points:
-                self.dupes += 1
             detail = (m.group("desc") or "").strip()
             if m.group("dir"):
                 detail = f"{detail} # {m.group('dir').upper()} {m.group('why')}".strip()
-            self.points[n] = (tap_outcome(m), detail)
+            outcome = tap_outcome(m)
+            if n in self.points:
+                # A number reported twice means something other than the
+                # suite printed TAP-looking lines. Never let the second
+                # report hide a failure; the collectors also refuse the
+                # whole cell (incomplete) when this happens.
+                self.dupes += 1
+                if self.points[n][0] == "fail":
+                    return True
+            self.points[n] = (outcome, detail)
             return True
         m = TAP_PLAN.match(line)
         if m:
@@ -126,10 +133,9 @@ class TapFile:
             # The suite chose to stop: a result in its own right (and one a
             # known issue can name), not a harness failure.
             return rows + [(f"{self.name}#bailout", "fail", self.bailout)]
-        if self.plan is None or self.plan != len(self.points) or self.dupes:
+        if self.plan is None or self.plan != len(self.points):
             rows.append((f"{self.name}#plan", "fail",
-                         f"planned {self.plan}, ran {len(self.points)}"
-                         + (f", {self.dupes} duplicate number(s)" if self.dupes else "")))
+                         f"planned {self.plan}, ran {len(self.points)}"))
         if exit_code and not any(o == "fail" for o, _ in self.points.values()):
             rows.append((f"{self.name}#exit", "fail", f"exited {exit_code}"))
         return rows
@@ -141,6 +147,13 @@ def prove_totals(lines: list[str]) -> tuple[int, int]:
         if m:
             return int(m.group("files")), int(m.group("tests"))
     raise Incomplete("no prove 'Files=N, Tests=M' summary in suite.log (suite died?)")
+
+
+def check_no_dupes(files: list[TapFile]) -> None:
+    bad = [f.name for f in files if f.dupes]
+    if bad:
+        raise Incomplete(f"duplicate TAP test numbers in {', '.join(bad[:5])} "
+                         f"-- stray TAP-like output interleaved with the suite's?")
 
 
 def check_tap_totals(files: list[TapFile], lines: list[str]) -> None:
@@ -171,6 +184,7 @@ def collect_git(cell: Path, lines: list[str], git_results: Path) -> tuple[list, 
         rows += tf.rows(code)
     if not files:
         raise Incomplete(f"no t*.out files under {git_results}")
+    check_no_dupes(files)
     check_tap_totals(files, lines)
     version = ""
     for ln in lines:
@@ -181,7 +195,8 @@ def collect_git(cell: Path, lines: list[str], git_results: Path) -> tuple[list, 
 
 
 PROVE_HEADER = re.compile(r"^(?:\[[\d:]+\]\s+)?(?P<file>\S+\.t) \.+\s*$")
-PROVE_WSTAT = re.compile(r"^(?P<file>\S+\.t) \(Wstat: (?P<wstat>\d+)")
+# prove pads the file column, so any run of spaces before "(Wstat:".
+PROVE_WSTAT = re.compile(r"^(?P<file>\S+\.t)\s+\(Wstat: (?P<wstat>\d+)")
 
 
 def collect_pjdfstest(cell: Path, lines: list[str]) -> tuple[list, str]:
@@ -211,6 +226,7 @@ def collect_pjdfstest(cell: Path, lines: list[str]) -> tuple[list, str]:
             cur.feed(ln)
     if not files:
         raise Incomplete("no `prove -v` per-file output in suite.log")
+    check_no_dupes(list(files.values()))
     bail = next((m for m in map(PROVE_BAIL.match, lines) if m), None)
     if bail and last is not None:
         # prove stops right after the file that bailed, so it is the last
@@ -240,7 +256,7 @@ def collect_stress_ng(cell: Path, lines: list[str]) -> tuple[list, str]:
     if tf.plan != len(tf.points) or tf.dupes:
         raise Incomplete(f"stress-ng TAP planned {tf.plan}, parsed {len(tf.points)}")
     # One stressor is one test, and its TAP description is its name.
-    rows = [(d.split()[0] if d else f"#{n}", o, d.partition(" ")[2])
+    rows = [(d.split()[0] if d else f"stress-ng#{n}", o, d.partition(" ")[2])
             for n, (o, d) in sorted(tf.points.items())]
     version = ""
     for ln in lines:

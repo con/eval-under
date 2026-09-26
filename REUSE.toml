@@ -19,6 +19,7 @@ path = [
     ".github/**",
     "bin/**",
     "drafts/**",
+    "evals/**",
     "fixtures/beegfs/beegfs-*.conf.template",
     "provision/**",
 ]

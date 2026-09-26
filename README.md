@@ -35,7 +35,7 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 Rows are **backends** (which filesystem the work happens on), columns
 are **targets** (which suite is run on it). All 20 cells are one job
 matrix in [`.github/workflows/test.yaml`](.github/workflows/test.yaml),
-fanned out from [`.github/matrix.yaml`](.github/matrix.yaml) -- adding a
+fanned out from [`evals/matrix.yaml`](evals/matrix.yaml) -- adding a
 filesystem or a suite is a data edit, not a code edit.
 
 The badges are ours, not GitHub's: GitHub publishes one badge per
@@ -65,7 +65,7 @@ a glance.
 ### Known issues: green jobs, honest badges
 
 Failures that are already understood are listed, per test, in
-[`.github/known-issues.yaml`](.github/known-issues.yaml): which cells
+[`evals/known-issues.yaml`](evals/known-issues.yaml): which cells
 (backend globs x targets), which tests, a kind-of-cause tag
 (`fs-limitation`, `fs-divergence`, `test-assumption`, `build-config`,
 `harness`, `fixed-upstream`, ...), and links to the evidence. Each cell
@@ -221,16 +221,17 @@ that was already there is only unmounted on teardown, never removed.
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |
-| `.github/matrix.yaml`                    | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
-| `bin/ci/matrix.sh`                       | Shell accessors over `.github/matrix.yaml`, sourced by every other `bin/ci` script |
+| `evals/matrix.yaml`                    | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
+| `bin/ci/matrix.sh`                       | Shell accessors over `evals/matrix.yaml`, sourced by every other `bin/ci` script |
 | `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
 | `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
-| `.github/known-issues.yaml`              | Known failures per cell and test: what keeps a job green and a badge honest        |
+| `evals/known-issues.yaml`              | Known failures per cell and test: what keeps a job green and a badge honest        |
 | `bin/ci/collect-results.py`              | Turns a suite's output (TAP / tasty) into per-test `results.tsv`                   |
 | `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
 | `bin/ci/check-cell.sh`                   | Runs those two for one cell; its exit status is the job's verdict                  |
-| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                       |
+| `bin/ci/shellcheck.sh`                   | shellcheck every tracked shell script (found by shebang); also run in CI           |
+| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                       |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
@@ -289,7 +290,7 @@ filesystem testing.
 3. At the end, run the wrapped command with `TMPDIR`,
    `DATALAD_TESTS_TEMP_DIR`, and (if `--set-home`) `HOME` pointing at
    the mount.
-4. Add a row to `backends:` in `.github/matrix.yaml`, then run
+4. Add a row to `backends:` in `evals/matrix.yaml`, then run
    `bin/ci/gen-readme-matrix.sh` to refresh the README grid above.
    The workflow picks the new cells up on its own. Commit the result.
 5. Teach `bin/ci/install-backend.sh` how to install its client packages.
@@ -305,14 +306,14 @@ filesystem testing.
    Build source trees into `$EVAL_UNDER_SRC_DIR` (the runner's own disk),
    never onto the mount: only the suite's I/O should exercise the
    filesystem under test. Pin any upstream checkout to a tag.
-3. Add an entry to `targets:` in `.github/matrix.yaml` with its `label`,
+3. Add an entry to `targets:` in `evals/matrix.yaml` with its `label`,
    `timeout`, `loop-size-mb`, `needs-root`, and `needs-git-annex`.
 4. Teach `bin/ci/collect-results.py` to turn its output into per-test
    results. Prefer a suite that speaks TAP (or JUnit), and cross-check
    the parse against the suite's own totals; without an adapter every
    cell of the new column reports `incomplete`.
 5. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.
-6. `shellcheck bin/ci/*.sh bin/eval-under*` before committing.
+6. `bin/ci/shellcheck.sh` before committing (CI runs the same check).
 
 ## Upstream targets
 

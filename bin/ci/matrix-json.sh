@@ -4,7 +4,7 @@
 #
 # Generated with Claude Code
 #
-# Render .github/matrix.yaml as the value of a GitHub Actions `matrix:`
+# Render evals/matrix.yaml as the value of a GitHub Actions `matrix:`
 # key -- i.e. {"include": [ {...}, ... ]} -- for consumption via
 # fromJson() in .github/workflows/test.yaml.
 #

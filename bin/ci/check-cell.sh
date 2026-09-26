@@ -4,7 +4,7 @@
 #
 # Generated with Claude Code
 #
-# Judge one cell's run against .github/known-issues.yaml: turn the
+# Judge one cell's run against evals/known-issues.yaml: turn the
 # suite's output into per-test results (collect-results.py), then
 # classify them (known_issues.py check). The exit status is the job's
 # verdict: 0 when every failure is covered by a known issue, 1 on a new
@@ -31,6 +31,13 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # matrix.sh is a sourced library, resolved at runtime relative to $here.
 # shellcheck source=bin/ci/matrix.sh disable=SC1091
 . "$here/matrix.sh"
+
+usage() {
+    sed -n '/^# usage:/,/^# Writes/{s/^# \{0,1\}//;p}' "$0"
+}
+case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+esac
 
 BACKEND="${1:?backend required}"
 VERSION="${2:?version required}"

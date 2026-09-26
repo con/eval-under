@@ -2,7 +2,7 @@ name: test
 
 # The whole eval-under matrix, in one workflow.
 #
-# Cells come from .github/matrix.yaml via bin/ci/matrix-json.sh, rather
+# Cells come from evals/matrix.yaml via bin/ci/matrix-json.sh, rather
 # than being spelled out here: adding a filesystem or a suite should be
 # a data edit, and the shell scripts in bin/ci/ read the same file, so
 # they cannot drift from what CI actually runs.
@@ -17,15 +17,15 @@ on:
     paths:
       - "bin/**"
       - "provision/**"
-      - ".github/matrix.yaml"
-      - ".github/known-issues.yaml"
+      - "evals/matrix.yaml"
+      - "evals/known-issues.yaml"
       - ".github/workflows/test.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "provision/**"
-      - ".github/matrix.yaml"
-      - ".github/known-issues.yaml"
+      - "evals/matrix.yaml"
+      - "evals/known-issues.yaml"
       - ".github/workflows/test.yaml"
   workflow_dispatch:
   schedule:
@@ -42,12 +42,19 @@ jobs:
       cells: ${{ steps.cells.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-      # Fail fast on a typo'd backend/target/tag, or a GOTCHAS.md whose
-      # generated section no longer matches the YAML.
-      - name: Validate known issues
-        run: bin/ci/known_issues.py validate --gotchas
       - id: cells
         run: echo "matrix=$(bin/ci/matrix-json.sh)" >> "$GITHUB_OUTPUT"
+
+  # A typo'd backend/target/tag, or a GOTCHAS.md whose generated section
+  # no longer matches evals/known-issues.yaml. Its own job, so a docs slip
+  # does not stop the matrix from running (each cell re-validates the
+  # issues it is judged against anyway).
+  known-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate known issues
+        run: bin/ci/known_issues.py validate --gotchas
 
   test:
     needs: matrix
@@ -64,6 +71,9 @@ jobs:
     permissions:
       contents: read
       actions: read  # to download artifacts from con/git-annex
+    env:
+      # suite.log, suite.rc, results.tsv, verdict.json (see bin/ci/matrix.sh)
+      EVAL_UNDER_OUTPUT_DIR: /tmp/eval-under-output/${{ matrix.slug }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,16 +106,18 @@ jobs:
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
       - name: Dump failure logs
-        if: always() && steps.suite.outcome == 'failure'
+        if: failure() || steps.suite.outcome == 'failure'
         run: >-
           bin/ci/dump-failure-logs.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
-      # Green if every failure is covered by .github/known-issues.yaml; red
+      # Green if every failure is covered by evals/known-issues.yaml; red
       # on a new failure or a run that did not complete. The badge on the
       # status page reports the failures either way.
+      # !cancelled(), not always(): a run superseded by a newer push would
+      # otherwise record every cell as "incomplete".
       - name: Check against known issues
-        if: always()
+        if: ${{ !cancelled() }}
         run: >-
           bin/ci/check-cell.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
@@ -118,7 +130,7 @@ jobs:
           path: |
             /var/log/beegfs-*
             /opt/eval-under-src/git/t/test-results/**
-            /tmp/eval-under-output/${{ matrix.slug }}/**
+            ${{ env.EVAL_UNDER_OUTPUT_DIR }}/**
           if-no-files-found: ignore
 
       # One tiny artifact per cell, read back by the `badges` job. A
@@ -130,7 +142,7 @@ jobs:
         if: always()
         run: |
           mkdir -p result && echo "${{ job.status }}" > result/conclusion
-          cp /tmp/eval-under-output/${{ matrix.slug }}/verdict.json result/ || true
+          cp "$EVAL_UNDER_OUTPUT_DIR/verdict.json" result/ || true
 
       - name: Upload cell result
         if: always()

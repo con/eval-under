@@ -28,7 +28,7 @@
 #
 # Exits with the suite's own status. The combined output is also kept in
 # <output-dir>/suite.log and the status in suite.rc, for
-# bin/ci/check-cell.sh to judge against .github/known-issues.yaml.
+# bin/ci/check-cell.sh to judge against evals/known-issues.yaml.
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -76,6 +76,12 @@ echo "I: $(target_label "$TARGET") under $BACKEND/$VERSION (timeout ${TIMEOUT}s)
 out="$(cell_output_dir "$BACKEND" "$VERSION" "$TARGET")"
 mkdir -p "$out"
 rm -f "$out/suite.rc" "$out/results.tsv" "$out/verdict.json"
+# We run under sudo, but the checker that reads and adds to this directory
+# runs as the invoking user. Hand the directory over now, not at the end,
+# so the checker can still write its verdict if this script is killed.
+if [ -n "${SUDO_UID:-}" ]; then
+    chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$out"
+fi
 
 # Sudo is expected to be in place already (workflow uses `sudo -E`); the
 # script itself just forwards. The timeout keeps a runaway suite from
@@ -87,9 +93,9 @@ rc=${PIPESTATUS[0]}
 set -e
 echo "$rc" > "$out/suite.rc"
 
-# We run under sudo, but the checker that reads and adds to these runs
-# as the invoking user.
+# Only the files this script wrote: $out may be an override
+# (EVAL_UNDER_OUTPUT_DIR survives `sudo -E`), so no recursive chown.
 if [ -n "${SUDO_UID:-}" ]; then
-    chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$out"
+    chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$out/suite.log" "$out/suite.rc"
 fi
 exit "$rc"
