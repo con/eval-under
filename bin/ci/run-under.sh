@@ -26,9 +26,13 @@
 #   EVAL_UNDER_OUTPUT_DIR      where to keep suite.log / suite.rc
 #                              (default: /tmp/eval-under-output/<cell>)
 #
-# Exits with the suite's own status. The combined output is also kept in
+# Exits with the suite's own status. Its stdout is also kept in
 # <output-dir>/suite.log and the status in suite.rc, for
 # bin/ci/check-cell.sh to judge against evals/known-issues.yaml.
+# stdout only, deliberately: every suite reports on stdout, and merging
+# stderr into the same pipe splices a tool's messages into the middle of
+# a half-written result line (git-annex's "not enough free space ..."
+# landing between tasty's "retrieveKeyFile:" and its "OK").
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -88,7 +92,7 @@ fi
 # hitting the workflow-level timeout with no signal of its own.
 set +e
 "$here/../eval-under" "$BACKEND" "${opts[@]}" --set-home -- \
-    timeout "$TIMEOUT" "$runner" 2>&1 | tee "$out/suite.log"
+    timeout "$TIMEOUT" "$runner" | tee "$out/suite.log"
 rc=${PIPESTATUS[0]}
 set -e
 echo "$rc" > "$out/suite.rc"

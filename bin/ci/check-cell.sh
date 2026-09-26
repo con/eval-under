@@ -47,5 +47,5 @@ out="$(cell_output_dir "$BACKEND" "$VERSION" "$TARGET")"
 mkdir -p "$out"
 
 "$here/collect-results.py" "$TARGET" "$out" \
-    --git-results "$EVAL_UNDER_SRC_DIR/git/t/test-results"
+    --git-t "$EVAL_UNDER_SRC_DIR/git/t"
 exec "$here/known_issues.py" check "$BACKEND" "$VERSION" "$TARGET" "$out"

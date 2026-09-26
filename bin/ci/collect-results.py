@@ -10,8 +10,9 @@
 # Every suite here already speaks something standard or close to it, so
 # each adapter is small and parses a format rather than scraping prose:
 #
-#   git        TAP, one file per script: t/test-results/<script>.out
-#              (written by --verbose-log) plus <script>.exit
+#   git        JUnit XML, one file per script: t/out/TEST-<script>.xml
+#              (--write-junit-xml; see collect_git for why not the TAP),
+#              plus test-results/<script>.out/.exit for plan and status
 #   pjdfstest  TAP, as echoed by `prove -v` into suite.log
 #   stress-ng  TAP, emitted by our own target-stress-ng.sh into suite.log
 #   git-annex  tasty's console tree in suite.log. git-annex runs its test
@@ -41,7 +42,9 @@
 # they can be listed in known-issues.yaml like any other test.
 #
 # usage:
-#   bin/ci/collect-results.py <target> <cell-dir> [--git-results DIR]
+#   bin/ci/collect-results.py <target> <cell-dir> [--git-t DIR]
+#
+#   --git-t   git's t/ directory (default /opt/eval-under-src/git/t)
 #
 # Reads <cell-dir>/suite.log, writes <cell-dir>/results.tsv. Exits 0 even
 # for incomplete results: incompleteness is recorded in the file, and it
@@ -51,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
@@ -167,25 +171,92 @@ def check_tap_totals(files: list[TapFile], lines: list[str]) -> None:
 # --------------------------------------------------------------------------
 # adapters: each returns (rows, version)
 
-def collect_git(cell: Path, lines: list[str], git_results: Path) -> tuple[list, str]:
-    if not git_results.is_dir():
-        raise Incomplete(f"no git test-results directory at {git_results}")
-    rows, files = [], []
-    for out in sorted(git_results.glob("t[0-9]*.out")):
-        tf = TapFile(out.name[:-len(".out")] + ".sh")
-        for ln in clean_lines(out):
-            # Only column-0 lines: --verbose-log interleaves command output
-            # and echoes each test body, and a body quoting TAP (t0000
-            # does) is indented, so anchoring keeps it out.
-            tf.feed(ln)
-        ex = out.with_suffix(".exit")
+def junit_cases(path: Path) -> list[tuple[int, str, str]]:
+    """(number, outcome, description) per <testcase> of one git JUnit file.
+
+    test-lib writes the closing tags only when the script reaches
+    test_done, so a script that died leaves them off; add them back
+    rather than lose the tests that did run (the missing plan line then
+    reports the death).
+    """
+    text = path.read_text(errors="replace")
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        try:
+            root = ET.fromstring(text + "\n  </testsuite>\n</testsuites>\n")
+        except ET.ParseError as e:
+            raise Incomplete(f"unparsable JUnit XML {path.name}: {e}")
+    out = []
+    for tc in root.iter("testcase"):
+        # name="t0001.13 <description>", classname="t0001": test-lib's
+        # $this_test is the script's number, not its file name.
+        cls = tc.get("classname", "")
+        m = re.match(re.escape(cls) + r"\.(\d+) ?(.*)$", tc.get("name", ""), re.S)
+        if not m:
+            continue                     # "all tests skipped" placeholder
+        desc = m.group(2)
+        if tc.find("failure") is not None:
+            outcome = "fail"
+        elif tc.find("skipped") is not None:
+            outcome = "skip"
+        elif desc.endswith(" (known breakage)"):
+            outcome = "todo"
+        elif desc.endswith(" (breakage fixed)"):
+            outcome = "todo-pass"
+        else:
+            outcome = "pass"
+        out.append((int(m.group(1)), outcome, desc))
+    return out
+
+
+def collect_git(cell: Path, lines: list[str], git_t: Path) -> tuple[list, str]:
+    """Per-test results from git's own JUnit XML (--write-junit-xml).
+
+    Not from the TAP in test-results/*.out: under --verbose-log those
+    files also carry every command's output, and a test that runs a TAP
+    producer of its own (t0202 runs a Perl Test::More script) puts a
+    second, independently numbered stream in the same file. The JUnit
+    files are written by test-lib's own bookkeeping, so nothing a test
+    prints can leak into them. The .out files still supply the one thing
+    JUnit cannot: the final plan line, whose absence means the script
+    died before test_done. .exit carries the script's exit status.
+    """
+    junit, results = git_t / "out", git_t / "test-results"
+    if not junit.is_dir():
+        raise Incomplete(f"no JUnit directory {junit} (GIT_TEST_OPTS lacks --write-junit-xml?)")
+    rows, nfiles, npoints = [], 0, 0
+    for xml in sorted(junit.glob("TEST-t[0-9]*.xml")):
+        stem = xml.name[len("TEST-"):-len(".xml")]
+        script = f"{stem}.sh"
+        nfiles += 1
+        cases = junit_cases(xml)
+        npoints += len(cases)
+        nums = [n for n, _, _ in cases]
+        if len(set(nums)) != len(nums):
+            raise Incomplete(f"duplicate test numbers in {xml.name}")
+        out, ex = results / f"{stem}.out", results / f"{stem}.exit"
+        plan = None
+        if out.is_file():
+            for ln in clean_lines(out):
+                m = TAP_PLAN.match(ln)
+                if m:
+                    plan = int(m.group("n"))  # test_done prints it last
         code = int(ex.read_text().strip() or 0) if ex.is_file() else None
-        files.append(tf)
-        rows += tf.rows(code)
-    if not files:
-        raise Incomplete(f"no t*.out files under {git_results}")
-    check_no_dupes(files)
-    check_tap_totals(files, lines)
+        if plan == 0 and not cases:
+            rows.append((script, "skip", "all tests skipped"))
+            continue
+        rows += [(f"{script}#{n}", o, d) for n, o, d in sorted(cases)]
+        if plan is None or plan != len(cases):
+            rows.append((f"{script}#plan", "fail", f"planned {plan}, ran {len(cases)}"))
+        if code and not any(o == "fail" for _, o, _ in cases):
+            rows.append((f"{script}#exit", "fail", f"exited {code}"))
+    if not nfiles:
+        raise Incomplete(f"no TEST-t*.xml files under {junit}")
+    nf, nt = prove_totals(lines)
+    if nf != nfiles or nt != npoints:
+        raise Incomplete(f"prove reports {nf} file(s) / {nt} test(s), "
+                         f"JUnit has {nfiles} / {npoints}")
     version = ""
     for ln in lines:
         m = re.match(r"^I: git (\S+) @", ln)
@@ -386,8 +457,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("target")
     ap.add_argument("cell_dir", type=Path)
-    ap.add_argument("--git-results", type=Path,
-                    default=Path("/opt/eval-under-src/git/t/test-results"))
+    ap.add_argument("--git-t", type=Path,
+                    default=Path("/opt/eval-under-src/git/t"))
     a = ap.parse_args()
 
     log = a.cell_dir / "suite.log"
@@ -397,7 +468,7 @@ def main() -> int:
             raise Incomplete(f"no {log}")
         lines = clean_lines(log)
         if a.target == "git":
-            rows, version = collect_git(a.cell_dir, lines, a.git_results)
+            rows, version = collect_git(a.cell_dir, lines, a.git_t)
         elif a.target == "pjdfstest":
             rows, version = collect_pjdfstest(a.cell_dir, lines)
         elif a.target == "stress-ng":

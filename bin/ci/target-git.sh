@@ -111,6 +111,13 @@ echo "I: trash directories under $root"
 # are what bin/ci/dump-failure-logs.sh reports from and what the job
 # uploads as an artifact.
 #
+# --write-junit-xml writes t/out/TEST-<script>.xml, test-lib's own
+# per-test record, which bin/ci/collect-results.py reads for per-test
+# results (the .out files are not a clean TAP stream: tests that run a
+# TAP producer of their own, like t0202's Test::More script, add a
+# second numbering). `make prove` clears test-results/ but not out/, so
+# stale XML from an earlier local run is removed here.
+#
 # --root puts the per-test trash directory on the mount; the build and
 # test-results/ stay on the runner disk (bookkeeping, not filesystem
 # exercise).
@@ -119,8 +126,9 @@ echo "I: trash directories under $root"
 # git's SANITY prerequisite is off and the handful of tests asserting
 # "cannot write to a chmod-000 path" are skipped upstream-style rather
 # than failing.
+rm -rf "$SRC/t/out"
 exec make prove \
     T="${selected[*]}" \
     UNIT_TESTS= \
     GIT_PROVE_OPTS="--timer --jobs $JOBS" \
-    GIT_TEST_OPTS="--root=$root --verbose-log ${EVAL_UNDER_GIT_TEST_OPTS:-}"
+    GIT_TEST_OPTS="--root=$root --verbose-log --write-junit-xml ${EVAL_UNDER_GIT_TEST_OPTS:-}"
