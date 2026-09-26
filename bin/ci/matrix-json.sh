@@ -36,6 +36,9 @@ entries=()
 for cell in "${EVAL_UNDER_BACKENDS[@]}"; do
     IFS='|' read -r backend version label <<< "$cell"
     for target in "${EVAL_UNDER_TARGETS[@]}"; do
+        # Not every backend x target pair is a cell -- see cell_enabled()
+        # in matrix.sh.
+        cell_enabled "$backend" "$version" "$target" || continue
         entries+=("$backend|$version|$label|$target|$(target_label "$target")|$(cell_slug "$backend" "$version" "$target")")
     done
 done

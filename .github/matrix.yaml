@@ -50,7 +50,8 @@ refs:
 #                  than a bare GitHub cancellation.
 #   loop-size-mb   backing-image size for `eval-under loop --size`.
 #   needs-root     the suite is meaningless without privilege, so the
-#                  NFS backend must export no_root_squash for it.
+#                  NFS backend must export no_root_squash for it, and a
+#                  backend marked `no-root` gets no cell for it at all.
 #                  pjdfstest is half privileged-vs-unprivileged
 #                  assertions and refuses to run otherwise; stress-ng's
 #                  chown/mknod stressors need CAP_CHOWN / CAP_MKNOD.
@@ -100,6 +101,19 @@ backends:
   - backend: nfs
     version: n/a
     label: NFS (localhost)
+
+  # `no-root` says this backend cannot hand the wrapped suite privilege:
+  # a FUSE mount belongs to whoever mounted it, and there is no
+  # --no-root-squash equivalent the way there is for NFS. So this row has
+  # no cell for a needs-root target (stress-ng, pjdfstest) -- such a cell
+  # would report on privilege rather than on the filesystem, which is the
+  # same reason bin/ci/run-under.sh refuses the pair outright. The two
+  # cells that remain are the ones that found something: git-annex is red
+  # here by design (invisible hardlinks), git is the control.
+  - backend: sshfs
+    version: n/a
+    label: sshfs (loopback)
+    no-root: true
   - backend: loop
     version: vfat
     label: Loop vfat

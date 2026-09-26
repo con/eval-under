@@ -286,6 +286,34 @@ versions. Whatever BeeGFS does differently, it is not breaking git's
 index, refs, or object plumbing -- so the cause sits in what git-annex
 layers on top, or in the syscalls the pjdfstest column is flagging.
 
+### `sshfs (loopback) / git-annex test`
+
+Red by design, and the reason this backend is in the matrix. SFTP's
+`ATTRS` carries no inode number and no link count, so sshfs synthesises
+`st_ino` per path and reports `nlink=1`. `git annex add` hardlinks
+content into `.git/annex/objects` and then verifies the link; the
+verification cannot observe a link that the protocol does not express, so
+the add fails with `failed to link to annex`. `hardlink=yes` with
+`hardlink-same-inode=no` in `fs-capabilities.sh` is the same finding in
+ten seconds rather than twenty minutes.
+
+Not locked-vs-unlocked and not adjusted-vs-plain: what matters is who
+does the ingest. `git add` through the annex filter writes a pointer and
+succeeds, which is why git-annex's own `Repo Tests v10 unlocked` group is
+green while `annex.addunlocked=true` in a plain v10 repo fails.
+
+`sshfs (loopback) / git testsuite` is the control: the same mount, a suite
+that never hardlinks into an object store.
+
+### `sshfs (loopback) / stress-ng`, `sshfs (loopback) / pjdfstest` -- no cells
+
+Not red, absent. A FUSE mount belongs to whoever mounted it and there is
+no `--no-root-squash` equivalent, so these suites could only report on
+privilege, not on the filesystem. `no-root: true` on the backend row in
+`.github/matrix.yaml` drops the pair everywhere (workflow, README grid,
+badges, report page), and `bin/ci/run-under.sh` refuses it outright with
+exit 2 if asked directly.
+
 ### `Loop ext4 / git-annex test`
 
 Pre-dates the matrix; ext4 is the control row, so this one *is* a real
