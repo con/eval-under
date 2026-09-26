@@ -35,7 +35,7 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 Rows are **backends** (which filesystem the work happens on), columns
 are **targets** (which suite is run on it). All 20 cells are one job
 matrix in [`.github/workflows/test.yaml`](.github/workflows/test.yaml),
-fanned out from [`.github/matrix.yaml`](.github/matrix.yaml) -- adding a
+fanned out from [`evals/matrix.yaml`](evals/matrix.yaml) -- adding a
 filesystem or a suite is a data edit, not a code edit.
 
 The badges are ours, not GitHub's: GitHub publishes one badge per
@@ -46,7 +46,8 @@ cell's own job log** via the [status page](https://con.github.io/eval-under/) --
 GitHub has no stable URL for "the latest job of this matrix cell", so
 the page's `#<cell>` anchor supplies the indirection. The page also
 carries what a badge cannot: which run produced the result, how long
-ago, and why a cell is red on purpose.
+ago, which known issues a red cell's failures fall under, and which
+failures are new.
 
 State lives in
 [`status.json`](../../blob/gh-pages/status.json) on that branch and is
@@ -59,8 +60,30 @@ the table.
 A red cell is not automatically a bug: vfat has no symlinks, ownership,
 or xattrs, and NFS has its own locking and close-to-open rules. The
 matrix exists to make *which* filesystem breaks *which* layer visible at
-a glance. [GOTCHAS.md](GOTCHAS.md) lists the cells that are red for a
-known reason, with the reason.
+a glance.
+
+### Known issues
+
+Failures already understood are listed per test in
+[`evals/known-issues.yaml`](evals/known-issues.yaml) -- which cells,
+which tests, a kind-of-cause tag, and links to the evidence -- and each
+cell is judged against it:
+
+| Cell outcome | CI job | Badge |
+| --- | --- | --- |
+| all tests pass | green | `passing` |
+| every failure covered by a known issue | green | `failing (known)`, still red |
+| any failure no issue covers | red | `N new failing` |
+| suite timed out, died, or its totals disagree with the parse | red | `incomplete` |
+
+Separately, a known issue whose tests all pass is flagged (`+N fixed?`
+on the badge, a notice on the run) without affecting the job, and one
+that matched no test that ran is warned about as stale.
+
+The "Known issues" section of [GOTCHAS.md](GOTCHAS.md) is generated from
+the same file (`bin/ci/known_issues.py gotchas`). For a new failure,
+`bin/ci/known_issues.py draft <verdict.json>` prints an issue stub from
+the cell's `logs-*` artifact.
 
 ## Test targets
 
@@ -192,21 +215,24 @@ into `bin/eval-under`, bumped with each release tag.
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |
-| `.github/matrix.yaml`                    | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
-| `bin/ci/matrix.sh`                       | Shell accessors over `.github/matrix.yaml`, sourced by every other `bin/ci` script |
+| `evals/matrix.yaml`                      | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
+| `bin/ci/matrix.sh`                       | Shell accessors over `evals/matrix.yaml`, sourced by every other `bin/ci` script   |
 | `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
 | `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
-| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `.github/matrix.yaml`                       |
+| `evals/known-issues.yaml`                | Known failures per cell and test                                                   |
+| `bin/ci/collect-results.py`              | Turns a suite's output into per-test `results.tsv`                                 |
+| `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
+| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                         |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
 | `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
-| `bin/ci/run-checks.sh`                   | The repo's own checks: shellcheck over every script, then the bats suite           |
-| `bin/ci/install-check-deps.sh`           | Runner-side apt step for those two (`shellcheck`, `bats`)                          |
+| `bin/ci/run-checks.sh`                   | The repo's own checks (`-h` lists them); what `checks.yaml` runs                   |
 | `tests/eval-under.bats`                  | CLI entry point: options, backend discovery, dispatch, `--version`                 |
+| `tests/test_*.py`, `tests/data/`         | Unit tests of the results parsers and the known-issues classifier                  |
 | `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
-| `.github/workflows/checks.yaml`          | shellcheck + bats on every push and PR; minutes, no root, no mount                 |
+| `.github/workflows/checks.yaml`          | `run-checks.sh` on every push and PR; minutes, no root, no mount                   |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)
@@ -248,35 +274,36 @@ filesystem testing.
 
 ## Tests
 
-Two layers, deliberately separate:
+Three layers, deliberately separate:
 
 - **`tests/*.bats`** -- the `eval-under` CLI itself: option handling,
   backend discovery, dispatch, `--version`. Unprivileged, mounts
   nothing, runs in about a second. The dispatcher is exercised against
   throwaway trees of *stub* backends, so adding a real backend does not
   mean rewriting the suite.
+- **`tests/test_*.py`** -- the results parsers and the known-issues
+  classifier, on trimmed real suite output under `tests/data/`.
 - **the CI matrix** (`.github/workflows/test.yaml`) -- the backends'
   actual mount and teardown logic, by running upstream suites under
   them. Needs root, a kernel module and a live cluster; that is what the
   badge grid at the top reports.
 
 ```bash
-# Both checks, exactly what .github/workflows/checks.yaml runs:
+# All checks, exactly what .github/workflows/checks.yaml runs:
 bin/ci/run-checks.sh
 
-# Or one at a time:
+# Or one at a time (-h lists them):
 bin/ci/run-checks.sh shellcheck
-bin/ci/run-checks.sh bats
+bin/ci/run-checks.sh unit
 
 # Or bats directly, when you want its own flags:
 bats tests/
 bats --filter version tests/
 ```
 
-`apt-get install shellcheck bats` is the whole setup -- plain
-bats-core, no `bats-assert` / `bats-support` submodules to vendor. The
-Vagrant VM installs both, and `bin/ci/install-check-deps.sh` is the
-runner-side equivalent.
+`bin/ci/install-check-deps.sh` installs what they need, all of it
+Debian/Ubuntu packages -- plain bats-core, no `bats-assert` /
+`bats-support` submodules to vendor. The Vagrant VM installs the same.
 
 A `--version` caveat worth knowing when a check fails only in CI:
 `git describe` needs tags, and `actions/checkout` fetches none by
@@ -296,7 +323,7 @@ default, which is why the checks workflow asks for `fetch-depth: 0`.
 3. At the end, run the wrapped command with `TMPDIR`,
    `DATALAD_TESTS_TEMP_DIR`, and (if `--set-home`) `HOME` pointing at
    the mount.
-4. Add a row to `backends:` in `.github/matrix.yaml`, then run
+4. Add a row to `backends:` in `evals/matrix.yaml`, then run
    `bin/ci/gen-readme-matrix.sh` to refresh the README grid above.
    The workflow picks the new cells up on its own. Commit the result.
 5. Teach `bin/ci/install-backend.sh` how to install its client packages.
@@ -312,10 +339,14 @@ default, which is why the checks workflow asks for `fetch-depth: 0`.
    Build source trees into `$EVAL_UNDER_SRC_DIR` (the runner's own disk),
    never onto the mount: only the suite's I/O should exercise the
    filesystem under test. Pin any upstream checkout to a tag.
-3. Add an entry to `targets:` in `.github/matrix.yaml` with its `label`,
+3. Add an entry to `targets:` in `evals/matrix.yaml` with its `label`,
    `timeout`, `loop-size-mb`, `needs-root`, and `needs-git-annex`.
-4. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.
-5. `shellcheck bin/ci/*.sh bin/eval-under*` before committing.
+4. Teach `bin/ci/collect-results.py` to turn its output into per-test
+   results. Prefer a suite that speaks TAP, and cross-check the parse
+   against the suite's own totals; without an adapter every cell of the
+   new column reports `incomplete`.
+5. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.
+6. `bin/ci/shellcheck.sh` before committing (CI runs the same check).
 
 ## Upstream targets
 

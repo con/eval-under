@@ -14,8 +14,9 @@
 # to the exact job log of the run that produced its current state, the
 # same shape as con/git-annex's con.github.io/git-annex-ci-reports.
 #
-# It also carries what a badge cannot: which run, how long ago, and the
-# standing explanation for a cell that is red on purpose.
+# It also carries what a badge cannot: which run, how long ago, which
+# known issues (evals/known-issues.yaml) a red cell's failures fall
+# under, and which failures are new.
 #
 # usage:
 #   bin/ci/render-report.py <status.json> <output-dir>
@@ -25,35 +26,30 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import known_issues
+from evals import backend_slug, load_matrix
+
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
 
-# Cells that are red for a known, documented reason. Keeps the page
-# honest: a red cell here is a finding, not a regression to chase.
-# Keyed by slug; kept in sync with GOTCHAS.md by hand (there are ten).
-KNOWN_RED = {
-    "loop-vfat-git-annex": "vfat has no symlinks or ownership",
-    "loop-vfat-git": "git's POSIXPERM prereq is set from uname, never probed",
-    "loop-vfat-stress-ng": "vfat lacks chown/xattr/hardlink semantics",
-    "loop-vfat-pjdfstest": "vfat is not a POSIX filesystem",
-    "beegfs-7.4.6-pjdfstest": "BeeGFS POSIX conformance gaps",
-    "beegfs-8.1.0-pjdfstest": "BeeGFS POSIX conformance gaps",
-    "beegfs-7.4.6-git-annex": "the bug this repo exists to characterise",
-    "beegfs-8.1.0-git-annex": "the bug this repo exists to characterise",
-    "nfs-pjdfstest": "NFS chown/setuid divergence (106 of 1280 assertions)",
-    "loop-ext4-git-annex": "pre-existing, predates this harness",
+# Badge text per cell state. A cell without a state (no verdict.json:
+# cancelled, or last run before verdicts existed) falls back to its job
+# conclusion. render-badge.sh maps the same keys to colours.
+BADGE_TEXT = {
+    "passing": "passing",
+    "failing-known": "failing (known)",
+    "failing-new": "{new} new failing",
+    "incomplete": "incomplete",
+    "success": "passing",
+    "failure": "failing",
+    "cancelled": "cancelled",
+    "skipped": "skipped",
 }
-
-STATE = {
-    "success": ("passing", "#4c1"),
-    "failure": ("failing", "#e05d44"),
-    "cancelled": ("cancelled", "#9f9f9f"),
-    "skipped": ("skipped", "#9f9f9f"),
-}
+MAX_NOTE_IDS = 3        # new-failure ids shown under a badge
 
 CSS = """
 :root { color-scheme: light dark;
@@ -75,19 +71,79 @@ td.cell:target { background:var(--hl); }
 a { color:var(--accent); text-decoration:none }
 a:hover { text-decoration:underline }
 .meta { display:block; font-size:.75rem; color:var(--muted); margin-top:.3rem }
-.why { display:block; font-size:.75rem; color:var(--muted); font-style:italic; margin-top:.15rem }
+.why { display:block; font-size:.75rem; color:var(--muted); margin-top:.15rem }
+.why.new { color:#cf222e; font-weight:600 }
+.why.fixed { color:var(--accent) }
+.issue { margin:1.5rem 0; padding-top:.5rem; border-top:1px solid var(--line) }
+.issue:target { background:var(--hl) }
+.issue h3 { font-size:1rem; margin:.2rem 0 }
+.tag { display:inline-block; font-size:.7rem; padding:0 .4rem; border:1px solid var(--line);
+  border-radius:1rem; color:var(--muted); margin-right:.25rem }
+code { font-size:.85em }
 footer { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
   color:var(--muted); font-size:.85rem }
 """
 
 
-def render_badge(conclusion: str, title: str, out: Path) -> None:
+def render_badge(status: str, title: str, out: Path, text: str = "") -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
-        [str(HERE / "render-badge.sh"), conclusion, title],
+        [str(HERE / "render-badge.sh"), status, title] + ([text] if text else []),
         capture_output=True, text=True, check=True,
     )
     out.write_text(r.stdout)
+
+
+def code(text: str) -> str:
+    """Escape, then render Markdown `code` spans -- all notes ever use."""
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", html.escape(text))
+
+
+def cell_notes(c: dict, st: str, fixed: list[str]) -> str:
+    """The lines under a badge: which issues, what is new, what is fixed."""
+    out = []
+    if st == "incomplete" and c.get("reason"):
+        out.append(f'<span class="why new">incomplete: {html.escape(c["reason"])}</span>')
+    new = c.get("new_failures", [])
+    if new:
+        more = c.get("counts", {}).get("new_fail", len(new)) - len(new[:MAX_NOTE_IDS])
+        out.append('<span class="why new">new: ' + ", ".join(
+            f"<code>{html.escape(t)}</code>" for t in new[:MAX_NOTE_IDS])
+            + (f" and {more} more" if more > 0 else "") + "</span>")
+    for iid, e in c.get("issues", {}).items():
+        if e.get("status") == "reproduced":
+            n = e.get("fail", 0)
+            out.append(f'<span class=why>known: <a href="#issue-{iid}">{iid}</a>'
+                       f' ({n} test{"s" if n != 1 else ""})</span>')
+    for iid in fixed:
+        out.append(f'<span class="why fixed">not reproduced: <a href="#issue-{iid}">{iid}</a> '
+                   f'&mdash; fixed?</span>')
+    return "".join(out)
+
+
+def render_issue(i: known_issues.Issue, cells: dict, repo: str) -> str:
+    def href(link: str) -> str:
+        return link if "://" in link else f"https://github.com/{repo}/blob/master/{link}"
+
+    where = []
+    for slug, c in cells.items():
+        e = c.get("issues", {}).get(i.id)
+        if e is not None:
+            where.append(f'<a href="#{slug}">{html.escape(slug)}</a>: '
+                         f'{html.escape(e.get("status", "?"))}'
+                         + (f' ({e["fail"]} failed)' if e.get("fail") else ""))
+    tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in i.tags)
+    n = len(i.tests)
+    scope = "whole cell" if i.coarse else f"{n} test pattern{'s' if n != 1 else ''}"
+    links = ", ".join(f'<a href="{html.escape(href(link))}">{html.escape(link)}</a>'
+                      for link in i.links)
+    notes = f"<p>{code(i.notes.strip())}</p>" if i.notes else ""
+    see = f"<span class=meta>see {links}</span>" if links else ""
+    return (f'<div class=issue id="issue-{i.id}"><h3><code>{i.id}</code>: '
+            f'{html.escape(i.title)}</h3>{tags}'
+            f'<span class=meta>{scope}</span>'
+            f'<span class=meta>{"; ".join(where) or "no cell has reported on it yet"}</span>'
+            f'{notes}{see}</div>\n')
 
 
 def ago(iso: str) -> str:
@@ -113,20 +169,24 @@ def main() -> int:
     status = json.loads(args.status_file.read_text())
     cells = status["cells"]
 
-    # Preserve matrix order rather than sorting: the page should read like
-    # the README grid.
-    with (ROOT / ".github/matrix.yaml").open() as fh:
-        import yaml
-        m = yaml.safe_load(fh)
-    backends = [(b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}",
-                 b["label"]) for b in m["backends"]]
+    # Matrix order, so the page reads like the README grid.
+    m = load_matrix()
+    backends = [(backend_slug(b["backend"], b["version"]), b["label"]) for b in m["backends"]]
     targets = [(t["name"], t["label"]) for t in m["targets"]]
+    issues = known_issues.parse(known_issues.load())
 
-    npass = sum(1 for c in cells.values() if c.get("conclusion") == "success")
+    def state(c: dict) -> str:
+        return c.get("state") or c.get("conclusion", "unknown")
+
+    npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
+    # Not "unknown", "cancelled" or "skipped": those say nothing about the filesystem.
+    nnew = sum(1 for c in cells.values()
+               if state(c) in ("failing-new", "incomplete", "failure"))
     total = len(cells)
-    overall = "success" if npass == total else "failure"
-    render_badge(overall, f"eval-under: {npass}/{total} cells passing",
-                 args.outdir / "badges" / "overall.svg")
+    overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
+    render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
+                 args.outdir / "badges" / "overall.svg",
+                 f"{npass}/{total} passing" + (f", {nnew} unexpected" if nnew else ""))
 
     rows = []
     for bslug, blabel in backends:
@@ -134,12 +194,17 @@ def main() -> int:
         for tname, tlabel in targets:
             slug = f"{bslug}-{tname}"
             c = cells.get(slug, {"conclusion": "unknown"})
-            concl = c.get("conclusion", "unknown")
+            st = state(c)
             label = c.get("label", slug)
-            render_badge(concl, label, args.outdir / "badges" / f"{slug}.svg")
+            cissues = c.get("issues", {})
+            fixed = [i for i, e in cissues.items() if e.get("status") == "not-reproduced"]
+            text = BADGE_TEXT.get(st, "unknown").format(
+                new=c.get("counts", {}).get("new_fail", "?"))
+            if fixed:
+                text += f" +{len(fixed)} fixed?"
+            render_badge(st, label, args.outdir / "badges" / f"{slug}.svg", text)
 
-            text, _ = STATE.get(concl, ("unknown", "#9f9f9f"))
-            img = (f'<img src="badges/{slug}.svg" alt="{html.escape(label)}: {text}" '
+            img = (f'<img src="badges/{slug}.svg" alt="{html.escape(label)}: {html.escape(text)}" '
                    f'height="20">')
             url = c.get("job_url", "")
             body = f'<a href="{html.escape(url)}">{img}</a>' if url else img
@@ -149,14 +214,11 @@ def main() -> int:
                 attempt = c.get("run_attempt", 1)
                 run = f"#{c['run_number']}" + (f".{attempt}" if attempt > 1 else "")
                 meta = (f'<span class=meta>{run} &middot; {ago(c.get("updated", ""))}</span>')
-            why = ""
-            if concl == "failure" and slug in KNOWN_RED:
-                why = f'<span class=why>expected: {html.escape(KNOWN_RED[slug])}</span>'
-            tds.append(f'<td class=cell id="{slug}">{body}{meta}{why}</td>')
+            tds.append(f'<td class=cell id="{slug}">{body}{meta}{cell_notes(c, st, fixed)}</td>')
         rows.append("<tr>" + "".join(tds) + "</tr>")
 
     head = "".join(f"<th>{html.escape(l)}</th>" for _, l in targets)
-    repo = "con/eval-under"
+    repo = m.get("repo-slug", "con/eval-under")
     doc = f"""<!doctype html>
 <html lang=en>
 <meta charset=utf-8>
@@ -176,6 +238,11 @@ updated {ago(status.get('updated', ''))}</p>
 </tbody>
 </table>
 </div>
+<h2>Known issues</h2>
+<p class=sub>From <a href="https://github.com/{repo}/blob/master/evals/known-issues.yaml">evals/known-issues.yaml</a>;
+see <a href="https://github.com/{repo}/blob/master/README.md#known-issues">README.md</a>
+for what they mean for CI.</p>
+{"".join(render_issue(i, cells, repo) for i in issues)}
 <footer>
 Rows are backends (which filesystem), columns are targets (which suite).
 Each badge links to that cell's job log from the run that produced its

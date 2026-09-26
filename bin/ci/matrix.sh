@@ -8,7 +8,7 @@
 # bin/ci/{install-target,run-under,target-*,matrix-json,...}.sh.
 #
 # This file used to *hold* the matrix. It now *reads* it, from
-# .github/matrix.yaml -- so the workflow and these scripts cannot drift
+# evals/matrix.yaml -- so the workflow and these scripts cannot drift
 # apart, because both parse the same file. Everything here is accessors
 # over that data plus the naming rules.
 #
@@ -17,7 +17,7 @@
 # Repo root, resolved from this file's location so callers can be run
 # from anywhere (CI checks out to a different path than the Vagrant VM).
 EVAL_UNDER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EVAL_UNDER_MATRIX_FILE="${EVAL_UNDER_MATRIX_FILE:-$EVAL_UNDER_ROOT/.github/matrix.yaml}"
+EVAL_UNDER_MATRIX_FILE="${EVAL_UNDER_MATRIX_FILE:-$EVAL_UNDER_ROOT/evals/matrix.yaml}"
 
 [ -r "$EVAL_UNDER_MATRIX_FILE" ] || {
     echo "matrix.sh: cannot read $EVAL_UNDER_MATRIX_FILE" >&2
@@ -87,6 +87,7 @@ export EVAL_UNDER_GIT_REF EVAL_UNDER_PJDFSTEST_REF
 
 # Filename-safe identifier for a backend cell: "beegfs-7.4.6", "nfs",
 # "loop-vfat".
+# Keep in sync with backend_slug() in bin/ci/evals.py.
 backend_slug() {
     local backend="$1" version="$2"
     if [ "$version" = "n/a" ]; then
@@ -131,3 +132,9 @@ target_loop_size_mb() { echo "${_EU_LOOP_MB[$1]:-100}"; }
 # two. run-under.sh passes --no-root-squash for these.
 target_needs_root()      { [ "${_EU_NEEDS_ROOT[$1]:-0}" = 1 ]; }
 target_needs_git_annex() { [ "${_EU_NEEDS_GA[$1]:-0}" = 1 ]; }
+
+# Where a cell's logs and results go: on the runner's disk, not the
+# mount, so they survive teardown.
+cell_output_dir() {
+    echo "${EVAL_UNDER_OUTPUT_DIR:-/tmp/eval-under-output/$(cell_slug "$1" "$2" "$3")}"
+}

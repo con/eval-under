@@ -22,8 +22,8 @@
 # usage:
 #   bin/ci/update-status.py <status.json> <results-dir> [--jobs jobs.json]
 #
-# <results-dir> holds the downloaded result-<slug> artifacts, each with a
-# `conclusion` file (see the "Record cell result" step in test.yaml).
+# <results-dir> holds the downloaded result-<slug> artifacts (see the
+# "Record cell result" step in test.yaml).
 #
 # --jobs takes the output of
 #     gh api --paginate repos/$REPO/actions/runs/$RUN_ID/jobs
@@ -33,7 +33,7 @@
 #
 # env:
 #   GITHUB_RUN_ID, GITHUB_RUN_NUMBER, GITHUB_RUN_ATTEMPT, GITHUB_SHA
-#   EVAL_UNDER_MATRIX_FILE   (default: .github/matrix.yaml)
+#   EVAL_UNDER_MATRIX_FILE   (default: evals/matrix.yaml)
 
 from __future__ import annotations
 
@@ -44,36 +44,35 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+from evals import load_matrix, matrix_cells
 
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def matrix_cells(matrix_file: Path) -> dict[str, dict]:
-    """Every cell the matrix currently defines, keyed by slug."""
-    with matrix_file.open() as fh:
-        d = yaml.safe_load(fh)
-    cells = {}
-    for b in d["backends"]:
-        bslug = b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}"
-        for t in d["targets"]:
-            slug = f"{bslug}-{t['name']}"
-            cells[slug] = {
-                "backend": b["backend"],
-                "version": b["version"],
-                "backend_label": b["label"],
-                "target": t["name"],
-                "target_label": t["label"],
-                "label": f"{b['label']} / {t['label']}",
-            }
-    return cells
+STATUS_NEW_FAILURES = 10    # new-failure ids kept per cell in status.json
 
 
-def read_conclusions(results_dir: Path) -> dict[str, str]:
-    """slug -> conclusion, from the downloaded result-<slug> artifacts.
+def verdict_fields(v: dict | None) -> dict:
+    """The slice of a verdict worth keeping in status.json.
+
+    status.json doubles as history (see publish-status.sh), so per-test
+    lists stay short.
+    """
+    if not v:
+        return {}
+    return {
+        "state": v["state"],
+        "reason": v["reason"],
+        "counts": v["counts"],
+        "new_failures": v["new_failures"][:STATUS_NEW_FAILURES],
+        "issues": {iid: {k: e[k] for k in ("status", "fail")}
+                   for iid, e in v["issues"].items()},
+    }
+
+
+def read_results(results_dir: Path) -> dict[str, tuple[str, dict | None]]:
+    """slug -> (conclusion, verdict.json or None).
 
     actions/download-artifact gives each artifact its own subdirectory; a
-    flat layout is accepted too so this can be exercised locally.
+    flat layout of conclusion files is accepted too so this can be
+    exercised locally.
     """
     out = {}
     if not results_dir.is_dir():
@@ -81,10 +80,18 @@ def read_conclusions(results_dir: Path) -> dict[str, str]:
     for p in sorted(results_dir.iterdir()):
         if p.is_dir() and p.name.startswith("result-"):
             f = p / "conclusion"
-            if f.is_file():
-                out[p.name[len("result-"):]] = f.read_text().strip()
+            if not f.is_file():
+                continue
+            verdict = None
+            vf = p / "verdict.json"
+            if vf.is_file():
+                try:
+                    verdict = json.loads(vf.read_text())
+                except ValueError as e:
+                    print(f"W: {vf}: {e}", file=sys.stderr)
+            out[p.name[len("result-"):]] = (f.read_text().strip(), verdict)
         elif p.is_file():
-            out[p.name] = p.read_text().strip()
+            out[p.name] = (p.read_text().strip(), None)
     return out
 
 
@@ -139,8 +146,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=Path, default=None)
     args = ap.parse_args()
 
-    matrix_file = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / ".github/matrix.yaml"))
-    cells = matrix_cells(matrix_file)
+    cells = matrix_cells(load_matrix())
 
     run_id = env_int("GITHUB_RUN_ID", 0)
     run_number = env_int("GITHUB_RUN_NUMBER", 0)
@@ -153,18 +159,20 @@ def main() -> int:
         status = {"cells": {}}
     prior = status.get("cells", {})
 
-    conclusions = read_conclusions(args.results_dir)
+    results = read_results(args.results_dir)
     urls = job_urls(args.jobs)
 
     merged, updated, kept, pruned = {}, 0, 0, 0
     for slug, meta in cells.items():
         old = prior.get(slug)
-        if slug in conclusions:
+        if slug in results:
+            conclusion, verdict = results[slug]
             old_key = (old.get("run_number", -1), old.get("run_attempt", -1)) if old else (-1, -1)
             if old is None or newer((run_number, run_attempt), old_key):
                 merged[slug] = {
                     **meta,
-                    "conclusion": conclusions[slug],
+                    **verdict_fields(verdict),
+                    "conclusion": conclusion,
                     "run_id": run_id,
                     "run_number": run_number,
                     "run_attempt": run_attempt,
@@ -201,7 +209,7 @@ def main() -> int:
 
     print(f"I: {len(merged)} cell(s): {updated} updated from this run, "
           f"{kept} carried over, {pruned} pruned")
-    if not urls and conclusions:
+    if not urls and results:
         print("W: no job URLs resolved -- report links will be empty", file=sys.stderr)
     return 0
 

@@ -107,6 +107,14 @@ filter_opts() {
 }
 
 declare -a passed=() skipped=() failed=()
+tap_n=0
+
+# One TAP line per stressor for bin/ci/collect-results.py, which takes the
+# description's first word ($2 starts with the stressor name) as the id.
+tap() {
+    tap_n=$((tap_n + 1))
+    echo "$1 $tap_n - $2"
+}
 
 run_one() {
     local name="$1" extra="$2" rc
@@ -115,6 +123,7 @@ run_one() {
     if ! supported_stressor "$name"; then
         echo "I: not in this stress-ng build; skipping"
         skipped+=("$name (not built)")
+        tap ok "$name # SKIP not in this stress-ng build"
         return 0
     fi
     # shellcheck disable=SC2086  # both are deliberate option lists
@@ -127,12 +136,12 @@ run_one() {
         $extra
     rc=$?
     case "$rc" in
-        0) passed+=("$name") ;;
+        0) passed+=("$name"); tap ok "$name" ;;
         # 3 = EXIT_NO_RESOURCE, 4 = EXIT_NOT_IMPLEMENTED. Both mean "this
         # filesystem/kernel cannot do it", which is information, not a
         # regression -- vfat has no xattrs and never will.
-        3|4) skipped+=("$name (rc=$rc)") ;;
-        *) failed+=("$name (rc=$rc)") ;;
+        3|4) skipped+=("$name (rc=$rc)"); tap ok "$name # SKIP rc=$rc" ;;
+        *) failed+=("$name (rc=$rc)"); tap "not ok" "$name # rc=$rc" ;;
     esac
 }
 
@@ -151,5 +160,6 @@ echo "=== stress-ng summary ($work) ==="
 printf 'passed  (%2d): %s\n' "${#passed[@]}"  "${passed[*]:-none}"
 printf 'skipped (%2d): %s\n' "${#skipped[@]}" "${skipped[*]:-none}"
 printf 'failed  (%2d): %s\n' "${#failed[@]}"  "${failed[*]:-none}"
+echo "1..$tap_n"
 
 [ "${#failed[@]}" -eq 0 ]
