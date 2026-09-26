@@ -31,24 +31,24 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import known_issues
+
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
 
-import known_issues  # noqa: E402  (bin/ci/known_issues.py, next to this file)
-
-# Badge wording and colour per cell state (see bin/ci/known_issues.py).
-# A job-level conclusion is the fallback for cells last run before the
-# known-issues check existed, which carry no state.
-STATE_TEXT = {
+# Badge text per cell state. A cell without a state (no verdict.json:
+# cancelled, or last run before verdicts existed) falls back to its job
+# conclusion. render-badge.sh maps the same keys to colours.
+BADGE_TEXT = {
     "passing": "passing",
     "failing-known": "failing (known)",
-    "failing-new": "new failures",
+    "failing-new": "{new} new failing",
     "incomplete": "incomplete",
     "success": "passing",
     "failure": "failing",
     "cancelled": "cancelled",
     "skipped": "skipped",
 }
+MAX_NOTE_IDS = 3        # new-failure ids shown under a badge
 
 CSS = """
 :root { color-scheme: light dark;
@@ -105,9 +105,9 @@ def cell_notes(c: dict, st: str, fixed: list[str]) -> str:
         out.append(f'<span class="why new">incomplete: {html.escape(c["reason"])}</span>')
     new = c.get("new_failures", [])
     if new:
-        more = c.get("counts", {}).get("new_fail", len(new)) - len(new[:3])
+        more = c.get("counts", {}).get("new_fail", len(new)) - len(new[:MAX_NOTE_IDS])
         out.append('<span class="why new">new: ' + ", ".join(
-            f"<code>{html.escape(t)}</code>" for t in new[:3])
+            f"<code>{html.escape(t)}</code>" for t in new[:MAX_NOTE_IDS])
             + (f" and {more} more" if more > 0 else "") + "</span>")
     for iid, e in c.get("issues", {}).items():
         if e.get("status") == "reproduced":
@@ -120,26 +120,25 @@ def cell_notes(c: dict, st: str, fixed: list[str]) -> str:
     return "".join(out)
 
 
-def render_issue(i: dict, cells: dict, repo: str) -> str:
+def render_issue(i: known_issues.Issue, cells: dict, repo: str) -> str:
     def href(link: str) -> str:
         return link if "://" in link else f"https://github.com/{repo}/blob/master/{link}"
 
     where = []
     for slug, c in cells.items():
-        e = c.get("issues", {}).get(i["id"])
-        if e is None:
-            continue
-        where.append(f'<a href="#{slug}">{html.escape(slug)}</a>: '
-                     f'{html.escape(e.get("status", "?"))}'
-                     + (f' ({e["fail"]} failed)' if e.get("fail") else ""))
-    tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in i["tags"])
-    scope = "whole cell" if known_issues.is_coarse(i) else f'{len(i["_tests"])} tests named'
-    links = ", ".join(f'<a href="{html.escape(href(l))}">{html.escape(l)}</a>' for l in i["links"])
-    notes = f"<p>{code(i['notes'].strip())}</p>" if i.get("notes") else ""
-    fixed_in = (f" &middot; fixed in {html.escape(i['fixed-in'])}" if i.get("fixed-in") else "")
-    return (f'<div class=issue id="issue-{i["id"]}"><h3><code>{i["id"]}</code>: '
-            f'{html.escape(i["title"])}</h3>{tags}'
-            f'<span class=meta>expect {i["expect"]} &middot; {scope}{fixed_in}</span>'
+        e = c.get("issues", {}).get(i.id)
+        if e is not None:
+            where.append(f'<a href="#{slug}">{html.escape(slug)}</a>: '
+                         f'{html.escape(e.get("status", "?"))}'
+                         + (f' ({e["fail"]} failed)' if e.get("fail") else ""))
+    tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in i.tags)
+    scope = "whole cell" if i.coarse else f"{len(i.patterns)} tests named"
+    links = ", ".join(f'<a href="{html.escape(href(link))}">{html.escape(link)}</a>'
+                      for link in i.links)
+    notes = f"<p>{code(i.notes.strip())}</p>" if i.notes else ""
+    return (f'<div class=issue id="issue-{i.id}"><h3><code>{i.id}</code>: '
+            f'{html.escape(i.title)}</h3>{tags}'
+            f'<span class=meta>{scope}</span>'
             f'<span class=meta>{"; ".join(where) or "no cell has reported on it yet"}</span>'
             f'{notes}<span class=meta>see {links}</span></div>\n')
 
@@ -167,27 +166,20 @@ def main() -> int:
     status = json.loads(args.status_file.read_text())
     cells = status["cells"]
 
-    # Preserve matrix order rather than sorting: the page should read like
-    # the README grid.
-    with (ROOT / "evals/matrix.yaml").open() as fh:
-        import yaml
-        m = yaml.safe_load(fh)
-    backends = [(b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}",
-                 b["label"]) for b in m["backends"]]
+    # Matrix order, so the page reads like the README grid.
+    m = known_issues.load_matrix()
+    backends = [(known_issues.backend_slug(b["backend"], b["version"]), b["label"])
+                for b in m["backends"]]
     targets = [(t["name"], t["label"]) for t in m["targets"]]
-
-    ki = known_issues.load()
-    issues = {i["id"]: i for i in ki["issues"]}
+    issues = known_issues.parse(known_issues.load())
 
     def state(c: dict) -> str:
         return c.get("state") or c.get("conclusion", "unknown")
 
     npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
-    # Anything that is neither passing nor fully covered by known issues --
-    # new failures, incomplete runs, and cells last run before verdicts
-    # existed (a bare "failure") -- is unexpected until shown otherwise.
+    # Unexpected: anything not passing or fully covered by known issues.
     nnew = sum(1 for c in cells.values()
-               if state(c) not in ("passing", "success", "failing-known"))
+               if state(c) not in known_issues.OK_STATES + ("success",))
     total = len(cells)
     overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
     render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
@@ -203,11 +195,9 @@ def main() -> int:
             st = state(c)
             label = c.get("label", slug)
             cissues = c.get("issues", {})
-            fixed = [i for i, e in cissues.items()
-                     if e.get("status") == "not-reproduced" and e.get("expect") == "fail"]
-            text = STATE_TEXT.get(st, "unknown")
-            if st == "failing-new":
-                text = f"{c.get('counts', {}).get('new_fail', '?')} new failing"
+            fixed = [i for i, e in cissues.items() if e.get("status") == "not-reproduced"]
+            text = BADGE_TEXT.get(st, "unknown").format(
+                new=c.get("counts", {}).get("new_fail", "?"))
             if fixed:
                 text += f" +{len(fixed)} fixed?"
             render_badge(st, label, args.outdir / "badges" / f"{slug}.svg", text)
@@ -250,7 +240,7 @@ updated {ago(status.get('updated', ''))}</p>
 <p class=sub>From <a href="https://github.com/{repo}/blob/master/evals/known-issues.yaml">evals/known-issues.yaml</a>.
 A cell whose failures are all covered here still shows as failing, but
 its CI job stays green; a failure none of these cover turns it red.</p>
-{"".join(render_issue(i, cells, repo) for i in ki["issues"])}
+{"".join(render_issue(i, cells, repo) for i in issues)}
 <footer>
 Rows are backends (which filesystem), columns are targets (which suite).
 Each badge links to that cell's job log from the run that produced its

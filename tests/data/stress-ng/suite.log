@@ -1,0 +1,6 @@
+I: stress-ng, version 0.13.12 (gcc 11.2)
+stress-ng: info:  [3140] dispatching hogs: 1 chmod
+ok 1 - chmod
+not ok 2 - utime # rc=2
+ok 3 - xattr # SKIP rc=3
+1..3

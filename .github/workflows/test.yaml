@@ -45,17 +45,6 @@ jobs:
       - id: cells
         run: echo "matrix=$(bin/ci/matrix-json.sh)" >> "$GITHUB_OUTPUT"
 
-  # A typo'd backend/target/tag, or a GOTCHAS.md whose generated section
-  # no longer matches evals/known-issues.yaml. Its own job, so a docs slip
-  # does not stop the matrix from running (each cell re-validates the
-  # issues it is judged against anyway).
-  known-issues:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate known issues
-        run: bin/ci/known_issues.py validate --gotchas
-
   test:
     needs: matrix
     name: ${{ matrix.name }}
@@ -72,7 +61,6 @@ jobs:
       contents: read
       actions: read  # to download artifacts from con/git-annex
     env:
-      # suite.log, suite.rc, results.tsv, verdict.json (see bin/ci/matrix.sh)
       EVAL_UNDER_OUTPUT_DIR: /tmp/eval-under-output/${{ matrix.slug }}
     steps:
       - uses: actions/checkout@v4
@@ -96,8 +84,7 @@ jobs:
           git config --global user.email test@github.land
           git config --global user.name  "GitHub Almighty"
 
-      # The suite's own exit status does not decide the job: known failures
-      # are expected. The "Check against known issues" step below does.
+      # Known failures are expected; "Check against known issues" decides.
       - name: Run ${{ matrix.target }} under ${{ matrix.backend }}
         id: suite
         continue-on-error: true
@@ -111,9 +98,6 @@ jobs:
           bin/ci/dump-failure-logs.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
-      # Green if every failure is covered by evals/known-issues.yaml; red
-      # on a new failure or a run that did not complete. The badge on the
-      # status page reports the failures either way.
       # !cancelled(), not always(): a run superseded by a newer push would
       # otherwise record every cell as "incomplete".
       - name: Check against known issues
@@ -136,8 +120,6 @@ jobs:
       # One tiny artifact per cell, read back by the `badges` job. A
       # matrix job cannot contribute to a `needs.*.outputs` map, so this
       # is how a fan-out reports 20 individual verdicts to a fan-in.
-      # verdict.json carries what the report shows (state, counts, which
-      # known issues reproduced); `conclusion` is the job's verdict.
       - name: Record cell result
         if: always()
         run: |

@@ -4,22 +4,23 @@
 #
 # Generated with Claude Code
 #
-# The repo's own checks: shellcheck over every script we ship, plus the
-# bats suite for the CLI entry point. Neither needs root, a mount, or a
-# backend -- this is the fast layer under the filesystem matrix, and the
-# same command CI runs.
+# The repo's own checks: shellcheck over every script we ship, the bats
+# suite for the CLI entry point, the known-issues file (and the GOTCHAS.md
+# section generated from it), and unit tests of the bin/ci Python. None
+# needs root, a mount, or a backend -- this is the fast layer under the
+# filesystem matrix, and the same command CI runs.
 #
 # usage:
 #   bin/ci/run-checks.sh [what]
 #
-#   what = all | shellcheck | bats     (default: all)
+#   what = all | shellcheck | bats | known-issues | unit   (default: all)
 #
 # env overrides:
 #   SHELLCHECK   shellcheck binary to use   (shellcheck)
 #   BATS         bats binary to use         (bats)
 #
 # Installs nothing; see bin/ci/install-check-deps.sh for the runner-side
-# apt step. Both tools are packaged: `apt-get install shellcheck bats`.
+# apt step: `apt-get install shellcheck bats python3-yaml`.
 
 set -euo pipefail
 
@@ -31,8 +32,9 @@ SHELLCHECK="${SHELLCHECK:-shellcheck}"
 BATS="${BATS:-bats}"
 
 case "$WHAT" in
-  all|shellcheck|bats) ;;
-  *) echo "unknown argument: $WHAT (expected: all|shellcheck|bats)" >&2; exit 2 ;;
+  all|shellcheck|bats|known-issues|unit) ;;
+  *) echo "unknown argument: $WHAT (expected: all|shellcheck|bats|known-issues|unit)" >&2
+     exit 2 ;;
 esac
 
 log() { printf '\nI: %s\n' "$*"; }
@@ -48,10 +50,7 @@ need() {
 run_shellcheck() {
   need "$SHELLCHECK" shellcheck || return 1
   log "shellcheck"
-  # Every tracked sh/bash script, found by shebang rather than by glob
-  # (bin/ci/shellcheck.sh). The .bats files are not picked up: their
-  # `#!/usr/bin/env bats` is no shell shebang, and shellcheck cannot
-  # parse bats' @test syntax anyway.
+  # .bats files have a bats shebang, so shellcheck.sh leaves them out.
   ( cd "$root" && SHELLCHECK="$SHELLCHECK" "$here/shellcheck.sh" )
 }
 
@@ -61,11 +60,27 @@ run_bats() {
   ( cd "$root" && "$BATS" tests/ )
 }
 
+run_known_issues() {
+  log "known issues"
+  "$here/known_issues.py" validate --gotchas
+}
+
+run_unit() {
+  log "unit tests"
+  ( cd "$root" && python3 -m unittest discover -s tests -p 'test_*.py' )
+}
+
 rc=0
 case "$WHAT" in
-  all)        run_shellcheck || rc=1; run_bats || rc=1 ;;
-  shellcheck) run_shellcheck || rc=1 ;;
-  bats)       run_bats || rc=1 ;;
+  all)
+    run_shellcheck || rc=1
+    run_bats || rc=1
+    run_known_issues || rc=1
+    run_unit || rc=1 ;;
+  shellcheck)   run_shellcheck || rc=1 ;;
+  bats)         run_bats || rc=1 ;;
+  known-issues) run_known_issues || rc=1 ;;
+  unit)         run_unit || rc=1 ;;
 esac
 
 [ "$missing" -eq 0 ] || echo "(some checks were skipped: see above)" >&2

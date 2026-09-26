@@ -111,9 +111,7 @@ echo "I: trash directories under $root"
 # are what bin/ci/dump-failure-logs.sh reports from and what the job
 # uploads as an artifact.
 #
-# --exec $here/git-prove-exec.sh runs each script through git's own
-# run-test.sh but keeps a copy of its TAP in test-results/<script>.tap,
-# which bin/ci/collect-results.py reads for per-test results.
+# --exec: see bin/ci/git-prove-exec.sh.
 #
 # --root puts the per-test trash directory on the mount; the build and
 # test-results/ stay on the runner disk (bookkeeping, not filesystem

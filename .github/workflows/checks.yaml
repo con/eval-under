@@ -1,14 +1,9 @@
 name: checks
 
-# The repo's own checks: shellcheck over every script we ship, plus the
-# bats suite for the `eval-under` CLI entry point. Minutes rather than
+# The repo's own checks (see bin/ci/run-checks.sh). Minutes rather than
 # the hour test.yaml's filesystem matrix takes, and it needs no root, no
 # kernel module and no cluster -- so it runs on everything, unfiltered
 # by paths.
-#
-# The two check steps are one-liners into bin/ci/ (see .claude/CLAUDE.md
-# -- the logic they invoke is shellcheck'able and runs locally as
-# `bin/ci/run-checks.sh`).
 
 on:
   push:
@@ -35,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install shellcheck + bats
+      - name: Install check dependencies
         run: bin/ci/install-check-deps.sh
 
       - name: shellcheck
@@ -43,3 +38,9 @@ jobs:
 
       - name: bats
         run: bin/ci/run-checks.sh bats
+
+      - name: known issues
+        run: bin/ci/run-checks.sh known-issues
+
+      - name: unit tests
+        run: bin/ci/run-checks.sh unit

@@ -29,11 +29,6 @@
 #   TMPDIR                         <mount> -- scratch files go under here
 #
 # Exit status: 0 if every stressor passed or skipped, 1 if any failed.
-#
-# Besides the human-readable summary, each stressor's verdict is printed
-# as a TAP line ("ok 3 - rename", "not ok 19 - utime # rc=2", "ok 20 -
-# xattr # SKIP rc=3") with the plan last. That is what
-# bin/ci/collect-results.py reads to report per-stressor results.
 
 set -uo pipefail
 
@@ -114,8 +109,8 @@ filter_opts() {
 declare -a passed=() skipped=() failed=()
 tap_n=0
 
-# One TAP line per stressor, at column 0 so the collector can pick it out
-# of the interleaved stress-ng chatter.
+# One TAP line per stressor for bin/ci/collect-results.py, which takes the
+# description's first word ($2 starts with the stressor name) as the id.
 tap() {
     tap_n=$((tap_n + 1))
     echo "$1 $tap_n - $2"

@@ -13,14 +13,14 @@
 #   bin/ci/install-check-deps.sh
 #
 # env overrides:
-#   EVAL_UNDER_CHECK_PKGS   packages to install   (shellcheck bats)
+#   EVAL_UNDER_CHECK_PKGS   packages to install   (shellcheck bats python3-yaml)
 #
 # Idempotent: already-installed packages are left alone by apt-get.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-read -r -a PKGS <<<"${EVAL_UNDER_CHECK_PKGS:-shellcheck bats}"
+read -r -a PKGS <<<"${EVAL_UNDER_CHECK_PKGS:-shellcheck bats python3-yaml}"
 
 SUDO=()
 [ "$(id -u)" -eq 0 ] || SUDO=(sudo)

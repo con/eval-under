@@ -38,7 +38,7 @@ log "eval-under's own checks"
 # VM too and not only on the runner. (Comment deliberately not opened
 # with the linter's own name -- that reads as a shellcheck directive.)
 apt-get install -y --no-install-recommends \
-  shellcheck bats
+  shellcheck bats python3-yaml
 
 log "eval-under-nfs / eval-under-loop dependencies"
 # nfs-kernel-server: provides exportfs + mount.nfs (eval-under-nfs).

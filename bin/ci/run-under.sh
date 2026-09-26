@@ -23,16 +23,9 @@
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
 #   EVAL_UNDER_LOOP_SIZE_MB    loop backing image size
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built the suites
-#   EVAL_UNDER_OUTPUT_DIR      where to keep suite.log / suite.rc
-#                              (default: /tmp/eval-under-output/<cell>)
+#   EVAL_UNDER_OUTPUT_DIR      the cell's output dir (see matrix.sh)
 #
-# Exits with the suite's own status. Its stdout is also kept in
-# <output-dir>/suite.log and the status in suite.rc, for
-# bin/ci/check-cell.sh to judge against evals/known-issues.yaml.
-# stdout only, deliberately: every suite reports on stdout, and merging
-# stderr into the same pipe splices a tool's messages into the middle of
-# a half-written result line (git-annex's "not enough free space ..."
-# landing between tasty's "retrieveKeyFile:" and its "OK").
+# Exits with the suite's own status.
 #
 # Runs as the current user; expects to be launched under sudo when the
 # backend requires root (beegfs/loop mount, NFS server bring-up).
@@ -91,6 +84,8 @@ fi
 # script itself just forwards. The timeout keeps a runaway suite from
 # hitting the workflow-level timeout with no signal of its own.
 set +e
+# stdout only: every suite reports there, and merging stderr would splice
+# tool messages into half-written result lines (tasty's "name: ... OK").
 "$here/../eval-under" "$BACKEND" "${opts[@]}" --set-home -- \
     timeout "$TIMEOUT" "$runner" | tee "$out/suite.log"
 rc=${PIPESTATUS[0]}

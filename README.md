@@ -62,45 +62,25 @@ or xattrs, and NFS has its own locking and close-to-open rules. The
 matrix exists to make *which* filesystem breaks *which* layer visible at
 a glance.
 
-### Known issues: green jobs, honest badges
+### Known issues
 
-Failures that are already understood are listed, per test, in
-[`evals/known-issues.yaml`](evals/known-issues.yaml): which cells
-(backend globs x targets), which tests, a kind-of-cause tag
-(`fs-limitation`, `fs-divergence`, `test-assumption`, `build-config`,
-`harness`, `fixed-upstream`, ...), and links to the evidence. Each cell
-is then judged twice:
+Failures already understood are listed per test in
+[`evals/known-issues.yaml`](evals/known-issues.yaml) -- which cells,
+which tests, a kind-of-cause tag, and links to the evidence -- and each
+cell is judged against it:
 
 | Cell outcome | CI job | Badge |
 | --- | --- | --- |
 | all tests pass | green | `passing` |
-| every failure covered by a known issue | **green** | `failing (known)` (still red) |
-| any failure no issue covers | **red** | `N new failing` |
-| suite timed out, died, or its totals disagree with the parse | **red** | `incomplete` |
+| every failure covered by a known issue | green | `failing (known)`, still red |
+| any failure no issue covers | red | `N new failing` |
+| suite timed out, died, or its totals disagree with the parse | red | `incomplete` |
 | a known issue's tests all pass | green, annotated | `+N fixed?` appended |
 
-So CI stays green for what we know is broken, yet still catches a new
-failure inside an already-red cell -- and notices when an upstream fix
-(say, a new git-annex daily build) makes a known issue go away.
-
-This needs per-test results, which `bin/ci/collect-results.py` derives
-from what each suite already emits: TAP for `git` (the stream prove
-parses, kept per script by `bin/ci/git-prove-exec.sh`), `pjdfstest`
-and our `stress-ng` driver,
-tasty's console tree for `git annex test` (upstream
-TODO for a TAP log:
-[provide TAP protocol logging for 'annex test'](https://git-annex.branchable.com/todo/provide_TAP_protocol_logging_for___39__annex_test__39__/)).
-Each parse is cross-checked against the suite's own totals, and a
-mismatch marks the cell incomplete (red) rather than quietly dropping
-failures. An issue can also cover a whole cell (`tests: ["*"]`) -- the
-coarse mode for failures not yet narrowed down, flagged as such on the
-status page.
-
-The "Known issues" section of [GOTCHAS.md](GOTCHAS.md) is generated
-from the same file (`bin/ci/known_issues.py gotchas`); CI fails if it
-goes stale. To triage a new failure, `bin/ci/known_issues.py draft
-<verdict.json>` prints issue stubs from a cell's `verdict.json` (in its
-`logs-*` artifact).
+The "Known issues" section of [GOTCHAS.md](GOTCHAS.md) is generated from
+the same file (`bin/ci/known_issues.py gotchas`). For a new failure,
+`bin/ci/known_issues.py draft <verdict.json>` prints an issue stub from
+the cell's `logs-*` artifact.
 
 ## Test targets
 
@@ -232,26 +212,28 @@ into `bin/eval-under`, bumped with each release tag.
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |
-| `evals/matrix.yaml`                    | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
-| `bin/ci/matrix.sh`                       | Shell accessors over `evals/matrix.yaml`, sourced by every other `bin/ci` script |
+| `evals/matrix.yaml`                      | Single source of truth: backends x targets, pinned upstream refs, per-target knobs |
+| `bin/ci/matrix.sh`                       | Shell accessors over `evals/matrix.yaml`, sourced by every other `bin/ci` script   |
 | `bin/ci/matrix-json.sh`                  | Renders that file as the workflow's `matrix:` value (via `fromJson`)               |
 | `bin/ci/install-target.sh`               | Runner-side prep for a target (apt package, or source build at a pinned tag)       |
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
-| `evals/known-issues.yaml`              | Known failures per cell and test: what keeps a job green and a badge honest        |
-| `bin/ci/collect-results.py`              | Turns a suite's output (TAP / tasty) into per-test `results.tsv`                   |
+| `bin/ci/git-prove-exec.sh`               | prove hook keeping each git test script's TAP and exit status                      |
+| `evals/known-issues.yaml`                | Known failures per cell and test                                                   |
+| `bin/ci/collect-results.py`              | Turns a suite's output into per-test `results.tsv`                                 |
 | `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
 | `bin/ci/check-cell.sh`                   | Runs those two for one cell; its exit status is the job's verdict                  |
-| `bin/ci/shellcheck.sh`                   | shellcheck every tracked shell script (found by shebang); run by `run-checks.sh`  |
-| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                       |
+| `bin/ci/shellcheck.sh`                   | shellcheck every tracked shell script, found by shebang                            |
+| `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                         |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |
 | `bin/ci/render-report.py`                | Renders `status.json` into the badge set + the report page                         |
 | `bin/ci/publish-status.sh`               | Ties those together and pushes the site to `gh-pages`                              |
-| `bin/ci/run-checks.sh`                   | The repo's own checks: shellcheck over every script, then the bats suite           |
-| `bin/ci/install-check-deps.sh`           | Runner-side apt step for those two (`shellcheck`, `bats`)                          |
+| `bin/ci/run-checks.sh`                   | The repo's own checks: shellcheck, bats, known issues, unit tests                  |
+| `bin/ci/install-check-deps.sh`           | Runner-side apt step for those checks                                              |
 | `tests/eval-under.bats`                  | CLI entry point: options, backend discovery, dispatch, `--version`                 |
+| `tests/test_*.py`, `tests/data/`         | Unit tests of the results parsers and the known-issues classifier                  |
 | `.github/workflows/test.yaml`            | The whole matrix: one `matrix` job, 20 `test` cells, one `publish` job             |
-| `.github/workflows/checks.yaml`          | shellcheck + bats on every push and PR; minutes, no root, no mount                 |
+| `.github/workflows/checks.yaml`          | `run-checks.sh` on every push and PR; minutes, no root, no mount                   |
 | `drafts/git-annex-test-beegfs.yaml`      | Copy-target workflow for `con/git-annex` (external PR target)                      |
 
 ## Local iteration (VM)
@@ -318,9 +300,9 @@ bats tests/
 bats --filter version tests/
 ```
 
-`apt-get install shellcheck bats` is the whole setup -- plain
+`apt-get install shellcheck bats python3-yaml` is the whole setup -- plain
 bats-core, no `bats-assert` / `bats-support` submodules to vendor. The
-Vagrant VM installs both, and `bin/ci/install-check-deps.sh` is the
+Vagrant VM installs these, and `bin/ci/install-check-deps.sh` is the
 runner-side equivalent.
 
 A `--version` caveat worth knowing when a check fails only in CI:
@@ -360,7 +342,7 @@ default, which is why the checks workflow asks for `fetch-depth: 0`.
 3. Add an entry to `targets:` in `evals/matrix.yaml` with its `label`,
    `timeout`, `loop-size-mb`, `needs-root`, and `needs-git-annex`.
 4. Teach `bin/ci/collect-results.py` to turn its output into per-test
-   results. Prefer a suite that speaks TAP (or JUnit), and cross-check
+   results. Prefer a suite that speaks TAP (`TapFile` parses it), and cross-check
    the parse against the suite's own totals; without an adapter every
    cell of the new column reports `incomplete`.
 5. Run `bin/ci/gen-readme-matrix.sh` and commit the new README column.

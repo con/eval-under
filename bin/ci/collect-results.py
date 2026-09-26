@@ -4,56 +4,25 @@
 #
 # Generated with Claude Code
 #
-# Turn one suite's own output into per-test results.tsv, the input to
-# `known_issues.py check`.
+# Turn one suite's own output into <cell-dir>/results.tsv (test id TAB
+# outcome [TAB detail], after `# key: value` header lines), the input to
+# `known_issues.py check`. Test id formats: see evals/known-issues.yaml.
 #
-# Every suite here already speaks something standard or close to it, so
-# each adapter is small and parses a format rather than scraping prose:
-#
-#   git        TAP, one file per script: t/test-results/<script>.tap (the
-#              stream prove parsed, kept by bin/ci/git-prove-exec.sh),
-#              plus <script>.exit
-#   pjdfstest  TAP, as echoed by `prove -v` into suite.log
-#   stress-ng  TAP, emitted by our own target-stress-ng.sh into suite.log
-#   git-annex  tasty's console tree in suite.log. git-annex runs its test
-#              groups as parallel subprocesses, and tasty-rerun's
-#              --rerun-log-file is overwritten by each of them, so the
-#              console is the only complete record. Upstream TODO for a
-#              TAP log instead:
-#              https://git-annex.branchable.com/todo/provide_TAP_protocol_logging_for___39__annex_test__39__/
-#
-# Robustness does not come from the parsers being clever. It comes from
-# cross-checking each one against the totals the suite prints itself
-# (prove's "Files=N, Tests=M", tasty's "N out of M tests failed"): any
-# disagreement marks the results incomplete, and known_issues.py turns
-# incomplete into a red job. A parser that drifts after a ref bump or an
-# upstream format change therefore fails loudly instead of silently
-# hiding failures.
-#
-# Test ids:
-#   git        t0001-init.sh#13
-#   pjdfstest  chown/00.t#412
-#   stress-ng  rename
-#   git-annex  Tests.Repo Tests v10 unlocked.Init Tests.add
-#              (the dotted form `git annex test --list-tests` prints)
-# plus, for TAP suites, per-file pseudo-tests: <file>#plan (plan missing or
-# not matching what ran) and <file>#exit (non-zero exit with no failing
-# assertion). Those are what a script that dies half-way reports as, and
-# they can be listed in known-issues.yaml like any other test.
+# Each parse is cross-checked against the totals the suite prints itself
+# (prove's "Files=N, Tests=M", tasty's "N out of M tests failed"); any
+# disagreement records the results as incomplete rather than guessing.
 #
 # usage:
-#   bin/ci/collect-results.py <target> <cell-dir> [--git-t DIR]
+#   bin/ci/collect-results.py <target> <cell-dir> [--git-t <git's t/ dir>]
 #
-#   --git-t   git's t/ directory (default /opt/eval-under-src/git/t)
-#
-# Reads <cell-dir>/suite.log, writes <cell-dir>/results.tsv. Exits 0 even
-# for incomplete results: incompleteness is recorded in the file, and it
-# is known_issues.py's job to decide what it means.
+# Exits 0 even for incomplete results: known_issues.py decides what that
+# means.
 
 from __future__ import annotations
 
 import argparse
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -99,11 +68,11 @@ class TapFile:
         self.dupes = 0
         self.bailout: str | None = None
 
-    def feed(self, line: str) -> bool:
+    def feed(self, line: str) -> None:
         m = TAP_BAIL.match(line)
         if m:
             self.bailout = m.group("why").strip()
-            return True
+            return
         m = TAP_LINE.match(line)
         if m:
             n = int(m.group("num"))
@@ -112,29 +81,24 @@ class TapFile:
                 detail = f"{detail} # {m.group('dir').upper()} {m.group('why')}".strip()
             outcome = tap_outcome(m)
             if n in self.points:
-                # A number reported twice means something other than the
-                # suite printed TAP-looking lines. Never let the second
-                # report hide a failure; the collectors also refuse the
-                # whole cell (incomplete) when this happens.
+                # Stray TAP-like output; never let it mask a failure (the
+                # collectors then refuse the cell via check_no_dupes).
                 self.dupes += 1
                 if self.points[n][0] == "fail":
-                    return True
+                    return
             self.points[n] = (outcome, detail)
-            return True
+            return
         m = TAP_PLAN.match(line)
         if m:
             self.plan = int(m.group("n"))
             self.skip_all = m.group("skip") or ""
-            return True
-        return False
 
     def rows(self, exit_code: int | None) -> list[tuple[str, str, str]]:
         if self.plan == 0 and not self.points:
             return [(self.name, "skip", self.skip_all)]
         rows = [(f"{self.name}#{n}", o, d) for n, (o, d) in sorted(self.points.items())]
         if self.bailout is not None:
-            # The suite chose to stop: a result in its own right (and one a
-            # known issue can name), not a harness failure.
+            # A result a known issue can name, not a harness failure.
             return rows + [(f"{self.name}#bailout", "fail", self.bailout)]
         if self.plan is None or self.plan != len(self.points):
             rows.append((f"{self.name}#plan", "fail",
@@ -168,17 +132,13 @@ def check_tap_totals(files: list[TapFile], lines: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------
-# adapters: each returns (rows, version)
+# adapters: (suite.log lines, args) -> rows
 
-def collect_git(cell: Path, lines: list[str], git_t: Path) -> tuple[list, str]:
-    """Per-test results from test-results/<script>.tap.
-
-    Those are copies of exactly the TAP stream prove parsed, captured by
-    bin/ci/git-prove-exec.sh. Not the --verbose-log .out files next to
-    them: those interleave every command's output with the TAP (see that
-    script for how that goes wrong).
-    """
-    results = git_t / "test-results"
+def collect_git(lines: list[str], a) -> list:
+    """From the <script>.tap/.exit files bin/ci/git-prove-exec.sh writes."""
+    if a.git_t is None:
+        sys.exit("collect-results.py: --git-t is required for target git")
+    results = a.git_t / "test-results"
     if not results.is_dir():
         raise Incomplete(f"no git test-results directory at {results}")
     files = []
@@ -196,12 +156,7 @@ def collect_git(cell: Path, lines: list[str], git_t: Path) -> tuple[list, str]:
                          f"(was the suite run through bin/ci/git-prove-exec.sh?)")
     check_no_dupes(files)
     check_tap_totals(files, lines)
-    version = ""
-    for ln in lines:
-        m = re.match(r"^I: git (\S+) @", ln)
-        if m:
-            version = f"git {m.group(1)}"
-    return rows, version
+    return rows
 
 
 PROVE_HEADER = re.compile(r"^(?:\[[\d:]+\]\s+)?(?P<file>\S+\.t) \.+\s*$")
@@ -209,7 +164,7 @@ PROVE_HEADER = re.compile(r"^(?:\[[\d:]+\]\s+)?(?P<file>\S+\.t) \.+\s*$")
 PROVE_WSTAT = re.compile(r"^(?P<file>\S+\.t)\s+\(Wstat: (?P<wstat>\d+)")
 
 
-def collect_pjdfstest(cell: Path, lines: list[str]) -> tuple[list, str]:
+def collect_pjdfstest(lines: list[str], a) -> list:
     def rel(p: str) -> str:
         return p.split("/tests/", 1)[-1]
 
@@ -239,41 +194,33 @@ def collect_pjdfstest(cell: Path, lines: list[str]) -> tuple[list, str]:
     check_no_dupes(list(files.values()))
     bail = next((m for m in map(PROVE_BAIL.match, lines) if m), None)
     if bail and last is not None:
-        # prove stops right after the file that bailed, so it is the last
-        # one it started.
+        # prove stops right after the file that bailed: the last one started.
         last.bailout = bail.group("why").strip() or "(no reason given)"
-    # A bail-out stops prove before it prints any totals, so there is
-    # nothing to cross-check against; the #bailout row carries the verdict.
+    # After a bail-out prove may print no totals; #bailout carries the verdict.
     if not any(f.bailout is not None for f in files.values()):
         check_tap_totals(list(files.values()), lines)
     rows = []
     for name, tf in files.items():
         rows += tf.rows(exit_codes.get(name))
-    version = ""
-    for ln in lines:
-        m = re.match(r"^I: pjdfstest @ (\S+)", ln)
-        if m:
-            version = f"pjdfstest {m.group(1)}"
-    return rows, version
+    return rows
 
 
-def collect_stress_ng(cell: Path, lines: list[str]) -> tuple[list, str]:
+def collect_stress_ng(lines: list[str], a) -> list:
+    """From the TAP target-stress-ng.sh prints; the description's first
+    word is the stressor, used as the test id."""
     tf = TapFile("stress-ng")
     for ln in lines:
         tf.feed(ln)
+    check_no_dupes([tf])
     if tf.plan is None:
         raise Incomplete("no TAP plan from target-stress-ng.sh (suite died?)")
-    if tf.plan != len(tf.points) or tf.dupes:
+    if tf.plan != len(tf.points):
         raise Incomplete(f"stress-ng TAP planned {tf.plan}, parsed {len(tf.points)}")
-    # One stressor is one test, and its TAP description is its name.
-    rows = [(d.split()[0] if d else f"stress-ng#{n}", o, d.partition(" ")[2])
-            for n, (o, d) in sorted(tf.points.items())]
-    version = ""
-    for ln in lines:
-        m = re.match(r"^I: stress-ng, version (\S+)", ln)
-        if m:
-            version = f"stress-ng {m.group(1)}"
-    return rows, version
+    rows = []
+    for o, d in tf.points.values():
+        name, _, detail = d.partition(" ")
+        rows.append((name, o, detail))
+    return rows
 
 
 TASTY_RESULT = re.compile(r"^(?P<ind> *)(?P<name>\S.*?):\s+(?P<res>OK|FAIL|SKIP)\b")
@@ -282,7 +229,8 @@ TASTY_GROUP_SUMMARY = re.compile(
 # tasty's own rerun hint; when it is an exact match on the full path it
 # is authoritative, so it overrides whatever the indentation suggested.
 TASTY_RERUN_PATH = re.compile(r"Use -p '\$0==\"(?P<path>[^\"]+)\"'")
-WORST = {"fail": 3, "skip": 2, "pass": 1}
+SEVERITY = {"fail": 3, "skip": 2, "pass": 1}
+MAX_LOOKAHEAD = 50      # lines searched for a group header's first child
 
 
 def indent(ln: str) -> int:
@@ -296,7 +244,7 @@ def child_indent(lines: list[str], k: int, ind: int) -> int | None:
     first child (at indent <= ind), but gives up at the first sibling or
     ancestor *result*, which proves lines[k] has no children.
     """
-    for x in lines[k + 1:k + 50]:
+    for x in lines[k + 1:k + MAX_LOOKAHEAD]:
         if not x.strip():
             continue
         i = indent(x)
@@ -307,13 +255,17 @@ def child_indent(lines: list[str], k: int, ind: int) -> int | None:
     return None
 
 
-def collect_git_annex(cell: Path, lines: list[str]) -> tuple[list, str]:
+def collect_git_annex(lines: list[str], a) -> list:
     """Parse tasty's console tree.
 
-    `git annex test` prints several independent tasty runs (it splits the
-    suite across subprocesses), each opening with a column-0 `Tests` and
-    closing with its own count line. Inside a run, two kinds of noise
-    have to be kept out of the group path:
+    The console is the only complete record: git-annex runs its test
+    groups as parallel subprocesses, which overwrite tasty-rerun's
+    --rerun-log-file (upstream TODO for a TAP log:
+    https://git-annex.branchable.com/todo/provide_TAP_protocol_logging_for___39__annex_test__39__/).
+
+    Each subprocess prints its own tasty run, opening with a column-0
+    `Tests` and closing with a count line. Two kinds of noise must be kept
+    out of the group path:
 
     - git-annex's own stderr ("not enough free space ...", "Detected a
       crippled filesystem.") lands at a group header's indentation. A
@@ -322,7 +274,7 @@ def collect_git_annex(cell: Path, lines: list[str]) -> tuple[list, str]:
     - failure transcripts contain column-0 lines ("failed", progress
       bars). Nothing legitimate inside a run sits at column 0.
     """
-    raw: list[list[str]] = []           # [id, outcome]
+    raw: list[list[str]] = []           # [id, outcome]; id mutable, see below
     stack: list[tuple[int, str]] = []    # (indent, group name)
     msg_indent: int | None = None        # lines deeper than this are messages
     last_failed: int | None = None       # raw index of the latest FAIL/SKIP
@@ -347,7 +299,7 @@ def collect_git_annex(cell: Path, lines: list[str]) -> tuple[list, str]:
         ind = indent(ln)
         if msg_indent is not None and ind > msg_indent:
             m = TASTY_RERUN_PATH.search(ln)
-            if m and last_failed is not None:
+            if m and last_failed is not None:     # authoritative full path
                 raw[last_failed][0] = m.group("path")
             continue
         if ind == 0:
@@ -376,65 +328,52 @@ def collect_git_annex(cell: Path, lines: list[str]) -> tuple[list, str]:
         raise Incomplete(f"tasty reports {expected_failed} of {expected_total} failed, "
                          f"parsed {counted['fail']} failed + {counted['skip']} skipped "
                          f"of {len(raw)}")
-    # The same path legitimately recurs: each subprocess run re-runs the
-    # `Init Tests` its other tests depend on, and a few names repeat
-    # within one group. Keep one row per id, with its worst outcome.
-    best: dict[str, str] = {}
+    # Paths legitimately recur (every subprocess re-runs the `Init Tests`
+    # the rest depend on): keep each id once, with its worst outcome.
+    worst: dict[str, str] = {}
     for tid, o in raw:
-        if WORST[o] > WORST.get(best.get(tid, ""), 0):
-            best[tid] = o
-    rows = [(tid, o, "") for tid, o in best.items()]
-    version = ""
-    for ln in lines:
-        m = re.match(r"^git-annex version: (\S+)", ln)
-        if m:
-            version = f"git-annex {m.group(1)}"
-    return rows, version
+        if SEVERITY[o] > SEVERITY.get(worst.get(tid, ""), 0):
+            worst[tid] = o
+    return [(tid, o, "") for tid, o in worst.items()]
+
+
+ADAPTERS = {
+    "git": collect_git,
+    "pjdfstest": collect_pjdfstest,
+    "stress-ng": collect_stress_ng,
+    "git-annex": collect_git_annex,
+}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("target")
     ap.add_argument("cell_dir", type=Path)
-    ap.add_argument("--git-t", type=Path,
-                    default=Path("/opt/eval-under-src/git/t"))
+    ap.add_argument("--git-t", type=Path, help="git's t/ directory (target git only)")
     a = ap.parse_args()
 
     log = a.cell_dir / "suite.log"
-    rows, version, reason = [], "", ""
+    rows, reason = [], ""
     try:
         if not log.is_file():
             raise Incomplete(f"no {log}")
-        lines = clean_lines(log)
-        if a.target == "git":
-            rows, version = collect_git(a.cell_dir, lines, a.git_t)
-        elif a.target == "pjdfstest":
-            rows, version = collect_pjdfstest(a.cell_dir, lines)
-        elif a.target == "stress-ng":
-            rows, version = collect_stress_ng(a.cell_dir, lines)
-        elif a.target == "git-annex":
-            rows, version = collect_git_annex(a.cell_dir, lines)
-        else:
+        if a.target not in ADAPTERS:
             raise Incomplete(f"no results adapter for target {a.target!r}")
+        rows = ADAPTERS[a.target](clean_lines(log), a)
     except Incomplete as e:
         reason = str(e)
-
-    ids = Counter(r[0] for r in rows)
-    dup = [i for i, n in ids.items() if n > 1]
+    dup = [i for i, n in Counter(r[0] for r in rows).items() if n > 1]
     if dup and not reason:
         reason = f"{len(dup)} duplicate test id(s), e.g. {dup[0]!r}"
 
     out = a.cell_dir / "results.tsv"
     with out.open("w") as fh:
-        fh.write(f"# target: {a.target}\n")
         fh.write(f"# complete: {'no' if reason else 'yes'}\n")
         if reason:
             fh.write(f"# reason: {reason}\n")
-        if version:
-            fh.write(f"# version: {version}\n")
         for tid, outcome, detail in rows:
-            detail = detail.replace("\t", " ")
-            fh.write(f"{tid}\t{outcome}" + (f"\t{detail}" if detail else "") + "\n")
+            fh.write("\t".join([tid, outcome] + ([detail.replace("\t", " ")] if detail else []))
+                     + "\n")
     c = Counter(r[1] for r in rows)
     print(f"I: {out}: {len(rows)} result(s) "
           + " ".join(f"{k}={v}" for k, v in sorted(c.items()))

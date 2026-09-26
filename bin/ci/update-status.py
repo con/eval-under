@@ -25,8 +25,7 @@
 # <results-dir> holds the downloaded result-<slug> artifacts, each with a
 # `conclusion` file (see the "Record cell result" step in test.yaml) and,
 # when the known-issues check ran, a `verdict.json` from
-# bin/ci/known_issues.py. The verdict's `state` is what the report shows
-# -- a job can be green (every failure known) while the cell is failing.
+# bin/ci/known_issues.py.
 #
 # --jobs takes the output of
 #     gh api --paginate repos/$REPO/actions/runs/$RUN_ID/jobs
@@ -47,29 +46,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+import known_issues
 
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def matrix_cells(matrix_file: Path) -> dict[str, dict]:
-    """Every cell the matrix currently defines, keyed by slug."""
-    with matrix_file.open() as fh:
-        d = yaml.safe_load(fh)
-    cells = {}
-    for b in d["backends"]:
-        bslug = b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}"
-        for t in d["targets"]:
-            slug = f"{bslug}-{t['name']}"
-            cells[slug] = {
-                "backend": b["backend"],
-                "version": b["version"],
-                "backend_label": b["label"],
-                "target": t["name"],
-                "target_label": t["label"],
-                "label": f"{b['label']} / {t['label']}",
-            }
-    return cells
+STATUS_NEW_FAILURES = 10    # new-failure ids kept per cell in status.json
 
 
 def read_verdicts(results_dir: Path) -> dict[str, dict]:
@@ -87,20 +66,18 @@ def read_verdicts(results_dir: Path) -> dict[str, dict]:
 def verdict_fields(v: dict | None) -> dict:
     """The slice of a verdict worth keeping in status.json.
 
-    Everything the report needs and no more: status.json doubles as
-    history (see publish-status.sh), so per-test lists stay short.
+    status.json doubles as history (see publish-status.sh), so per-test
+    lists stay short.
     """
     if not v:
         return {}
     return {
-        "state": v.get("state", ""),
-        "reason": v.get("reason", ""),
-        "version": v.get("version", ""),
-        "counts": v.get("counts", {}),
-        "new_failures": v.get("new_failures", [])[:10],
-        "issues": {iid: {k: e[k] for k in ("status", "expect", "fail", "pass", "coarse")
-                         if k in e}
-                   for iid, e in v.get("issues", {}).items()},
+        "state": v["state"],
+        "reason": v["reason"],
+        "counts": v["counts"],
+        "new_failures": v["new_failures"][:STATUS_NEW_FAILURES],
+        "issues": {iid: {k: e[k] for k in ("status", "fail", "pass", "coarse")}
+                   for iid, e in v["issues"].items()},
     }
 
 
@@ -174,8 +151,7 @@ def main() -> int:
     ap.add_argument("--jobs", type=Path, default=None)
     args = ap.parse_args()
 
-    matrix_file = Path(os.environ.get("EVAL_UNDER_MATRIX_FILE", ROOT / "evals/matrix.yaml"))
-    cells = matrix_cells(matrix_file)
+    cells = known_issues.matrix_cells(known_issues.load_matrix())
 
     run_id = env_int("GITHUB_RUN_ID", 0)
     run_number = env_int("GITHUB_RUN_NUMBER", 0)

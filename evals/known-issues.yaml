@@ -1,53 +1,29 @@
 # SPDX-FileCopyrightText: 2026 Yaroslav Halchenko <yaroslav.o.halchenko@dartmouth.edu>
 # SPDX-License-Identifier: MIT
 #
-# Known issues: every failure we already understand (or have at least
-# acknowledged), and where it applies. The single source of truth for
-# "this cell is red, and we know why" -- the job verdicts, the status
-# page, and the "Known issues" section of GOTCHAS.md are all derived
-# from this file.
-#
-# How it is used (bin/ci/known_issues.py):
-#
-#   - Each cell's suite output is turned into per-test results
-#     (bin/ci/collect-results.py), and every failure is matched against
-#     the issues below that apply to that cell.
-#   - The *job* stays green when every failure is covered by an issue,
-#     and turns red on a failure no issue covers, or on a run that did
-#     not complete (timeout, crash, unparsable output).
-#   - The *status page and badge* always show the truth: a cell whose
-#     failures are all known still reads "failing".
-#   - An `expect: fail` issue whose tests all pass is reported as "not
-#     reproduced" (fixed upstream?), one that matches no test that ran as
-#     "stale". Neither fails the job; both are annotated on the run.
+# Known failures per cell and test. Drives the CI verdicts, the status
+# page and GOTCHAS.md's "Known issues" section; see README.md#known-issues.
 #
 # Fields:
-#   id        unique slug; also the anchor in GOTCHAS.md and the report
+#   id        unique slug (anchor in GOTCHAS.md and on the status page)
 #   title     one line
-#   backends  globs over backend slugs: beegfs-7.4.6, beegfs-*, nfs,
-#             loop-vfat, loop-*
+#   backends  globs over backend slugs (beegfs-*, nfs, loop-vfat, ...)
 #   targets   target names from matrix.yaml, or "*"
-#   expect    fail  -- these tests are expected to fail (default)
-#             flaky -- either outcome is fine; still recorded
-#   tests     test ids (globs allowed; "*" = the whole cell, i.e. not yet
-#             narrowed down -- the crude mode, flagged as such in the
-#             report). A trailing `#107-108,118-120` expands like prove's
-#             "Failed tests:" line. Id formats per target:
+#   tests     test ids, globs allowed; "*" = the whole cell (not yet
+#             narrowed down). A trailing `#107-108,118-120` expands like
+#             prove's "Failed tests:". Id formats:
 #               git        t0001-init.sh#13
 #               pjdfstest  chown/00.t#412
 #               stress-ng  utime
 #               git-annex  Tests.Repo Tests v10 unlocked.Init Tests.add
-#                          (as printed by `git annex test --list-tests`)
-#             TAP targets also report <file>#plan, <file>#exit and
-#             <file>#bailout for scripts that die, which can be listed
-#             here like any other test.
-#   tags      from the vocabulary below (validated)
-#   fixed-in  optional "<tool> <version>": if the cell runs that version
-#             or newer and the issue still reproduces, the run says so
-#   links     required: upstream bug reports, GOTCHAS.md sections, ...
-#   notes     optional Markdown, rendered into GOTCHAS.md
+#                          (as `git annex test --list-tests` prints them)
+#             TAP scripts that die also report <file>#plan, <file>#exit
+#             or <file>#bailout.
+#   tags      from the vocabulary below
+#   links     upstream reports, GOTCHAS.md sections, ...
+#   notes     optional Markdown for GOTCHAS.md
 #
-# After editing: bin/ci/known_issues.py validate && bin/ci/known_issues.py gotchas
+# After editing: bin/ci/known_issues.py gotchas
 
 tags:
   fs-limitation: The filesystem lacks the feature by design (vfat has no symlinks); will not change.
@@ -93,10 +69,6 @@ issues:
       - "t1301-shared-repo.sh#2-3,5-22"
     tags: [test-assumption]
     links: ["GOTCHAS.md#loop-vfat--git-testsuite-posixperm"]
-    notes: |
-      vfat reports mode 0755 for everything, so every permission assertion
-      fails. t0001's 13 are exactly the 13 `check_config` call sites;
-      t1301 (core.sharedRepository) is permission checks throughout.
 
   - id: vfat-git-no-unix-sockets
     title: git's IPC and credential-cache tests need Unix sockets on the work tree
@@ -143,9 +115,6 @@ issues:
       - "chown/00.t#107-108,118-120,129-130,137-138,148-150,159-160,167-168,178-180,189-190,197-198,208-210,219-220,227-228,238-240,249-250,257-258,268-270,279-280,287-288,598-599,601,613-615,617-618,634-635,637,649,652,664,668-669,685,688,700-701,703,715-717,719-720,736-737,739,751-752,754,766-768,770-771,787-788,790,802-803,805,817-819,821-822,838-839,841,853-854,856,868-870,872-873,889-890,892"
     tags: [fs-divergence]
     links: ["GOTCHAS.md#nfs-bineval-under-nfs"]
-    notes: |
-      106 of chown/00.t's 1280 assertions. The cell runs `--no-root-squash`;
-      under the default `root_squash` pjdfstest refuses to start at all.
 
   - id: nfs-pjdfstest-untriaged
     title: remaining pjdfstest failures on NFS
@@ -182,19 +151,13 @@ issues:
       - "Tests.Repo Tests v10 *.export and import"
       - "Tests.Repo Tests v10 *.export and import of subdir"
       - "Tests.Repo Tests v10 *.git-remote-annex exporttree"
-    tags: [build-config, fixed-upstream, needs-triage]
+    tags: [needs-triage]
     links:
       - https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/
       - "GOTCHAS.md#beegfs--git-annex-test"
     notes: |
-      The same 8 of the 9 (repo mode x test) combinations fail on both
-      BeeGFS versions (unlocked mode's `git-remote-annex exporttree`
-      passes), with `renamePath:rename ... resource busy` / `mv: cannot
-      move ... Device or resource busy`.
-      Working hypothesis, under investigation: our git-annex build lacks
-      OsPath support, which upstream's builds have -- i.e. a build
-      configuration issue already addressed upstream, not a BeeGFS one.
-      Add `fixed-in:` once the version is known.
+      Working hypothesis: our git-annex build lacks OsPath support, which
+      upstream's builds have.
 
   # --------------------------------------------------------- loop images
   - id: loop-annex-diskreserve
@@ -205,14 +168,5 @@ issues:
     tags: [harness, needs-triage]
     links: ["GOTCHAS.md#loop-git-annex-cells-annexdiskreserve"]
     notes: |
-      git-annex refuses to store or fetch content when that would leave
-      less than `annex.diskreserve` (default 100 MB) free, and the git-annex
-      cells' loop image is 100 MB (`loop-size-mb` in matrix.yaml). Both loop
-      cells log well over a hundred "not enough free space" messages.
-      Hypothesis, not yet confirmed: that is also why the ext4 control row
-      fails -- only ~61 of its ~466 failure messages mention free space
-      directly; the rest look like knock-on failures, but no run has shown
-      it. Whole-cell (so this row cannot catch regressions!) until the
-      image is enlarged or diskreserve lowered for the test run, which
-      will settle it and reveal what is genuinely vfat-specific. Backends
-      are listed explicitly so a new loop-* row does not inherit this.
+      Backends listed explicitly so a new loop-* row does not inherit a
+      whole-cell issue.

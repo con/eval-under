@@ -4,28 +4,22 @@
 #
 # Generated with Claude Code
 #
-# prove --exec hook for git's testsuite: run each test exactly as git's
-# own t/run-test.sh would, and keep a copy of its stdout -- the TAP
-# stream prove itself parses -- in test-results/<script>.tap.
+# prove --exec hook for git's testsuite (see bin/ci/target-git.sh): runs
+# each test through git's own t/run-test.sh, keeping its TAP -- exactly
+# what prove parses -- in test-results/<script>.tap and its exit status in
+# <script>.exit, for bin/ci/collect-results.py.
 #
-# Why: that stream is the only clean per-test record. --verbose-log's
-# test-results/<script>.out mixes in every command's output (a test that
-# runs its own TAP producer, like t0202's Test::More script, adds a second
-# numbering; output lacking a final newline glues onto the next "ok N"
-# line), and git's --write-junit-xml breaks scripts that skip everything
-# (v2.55.0 calls an undefined write_junit_xml_testcase).
-#
-# Wired in by bin/ci/target-git.sh via GIT_PROVE_OPTS="--exec <this>";
-# prove honours the last --exec, overriding the Makefile's ./run-test.sh.
-# Runs with cwd = git's t/ directory, like run-test.sh.
-#
-# usage:
-#   git-prove-exec.sh <test-script> [test options...]
+# Why not git's own records: --verbose-log's .out files interleave command
+# output with the TAP (nested TAP streams, lines glued to "ok N"), and
+# --write-junit-xml breaks skip-all scripts (as of v2.55.0).
 
 set -euo pipefail
 
 usage() {
-    sed -n '/^# usage:/,/^$/{s/^# \{0,1\}//;p}' "$0"
+    cat <<'USAGE'
+usage: git-prove-exec.sh <test-script> [test options...]
+(run by prove, with cwd = git's t/)
+USAGE
 }
 
 case "${1:-}" in
@@ -34,7 +28,11 @@ case "${1:-}" in
     *) exec ./run-test.sh "$@" ;;       # unit tests: nothing to capture
 esac
 
-name="${1##*/}"
+base="test-results/$(basename "$1" .sh)"
 mkdir -p test-results
-# pipefail: prove must see the test's own exit status, not tee's.
-./run-test.sh "$@" | tee "test-results/${name%.sh}.tap"
+set +e
+./run-test.sh "$@" | tee "$base.tap"
+rc=${PIPESTATUS[0]}
+set -e
+echo "$rc" > "$base.exit"
+exit "$rc"

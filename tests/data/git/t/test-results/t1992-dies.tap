@@ -1,0 +1,4 @@
+TAP version 13
+pragma +strict
+ok 1 - first
+FATAL: Unexpected exit with code 3
