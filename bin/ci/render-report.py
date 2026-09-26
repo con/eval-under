@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import known_issues
+from evals import backend_slug, load_matrix
 
 HERE = Path(__file__).resolve().parent
 
@@ -132,15 +133,17 @@ def render_issue(i: known_issues.Issue, cells: dict, repo: str) -> str:
                          f'{html.escape(e.get("status", "?"))}'
                          + (f' ({e["fail"]} failed)' if e.get("fail") else ""))
     tags = "".join(f"<span class=tag>{html.escape(t)}</span>" for t in i.tags)
-    scope = "whole cell" if i.coarse else f"{len(i.patterns)} tests named"
+    n = len(i.tests)
+    scope = "whole cell" if i.coarse else f"{n} test pattern{'s' if n != 1 else ''}"
     links = ", ".join(f'<a href="{html.escape(href(link))}">{html.escape(link)}</a>'
                       for link in i.links)
     notes = f"<p>{code(i.notes.strip())}</p>" if i.notes else ""
+    see = f"<span class=meta>see {links}</span>" if links else ""
     return (f'<div class=issue id="issue-{i.id}"><h3><code>{i.id}</code>: '
             f'{html.escape(i.title)}</h3>{tags}'
             f'<span class=meta>{scope}</span>'
             f'<span class=meta>{"; ".join(where) or "no cell has reported on it yet"}</span>'
-            f'{notes}<span class=meta>see {links}</span></div>\n')
+            f'{notes}{see}</div>\n')
 
 
 def ago(iso: str) -> str:
@@ -167,9 +170,8 @@ def main() -> int:
     cells = status["cells"]
 
     # Matrix order, so the page reads like the README grid.
-    m = known_issues.load_matrix()
-    backends = [(known_issues.backend_slug(b["backend"], b["version"]), b["label"])
-                for b in m["backends"]]
+    m = load_matrix()
+    backends = [(backend_slug(b["backend"], b["version"]), b["label"]) for b in m["backends"]]
     targets = [(t["name"], t["label"]) for t in m["targets"]]
     issues = known_issues.parse(known_issues.load())
 
@@ -177,9 +179,9 @@ def main() -> int:
         return c.get("state") or c.get("conclusion", "unknown")
 
     npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
-    # Unexpected: anything not passing or fully covered by known issues.
+    # Not "unknown", "cancelled" or "skipped": those say nothing about the filesystem.
     nnew = sum(1 for c in cells.values()
-               if state(c) not in known_issues.OK_STATES + ("success",))
+               if state(c) in ("failing-new", "incomplete", "failure"))
     total = len(cells)
     overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
     render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
@@ -237,9 +239,9 @@ updated {ago(status.get('updated', ''))}</p>
 </table>
 </div>
 <h2>Known issues</h2>
-<p class=sub>From <a href="https://github.com/{repo}/blob/master/evals/known-issues.yaml">evals/known-issues.yaml</a>.
-A cell whose failures are all covered here still shows as failing, but
-its CI job stays green; a failure none of these cover turns it red.</p>
+<p class=sub>From <a href="https://github.com/{repo}/blob/master/evals/known-issues.yaml">evals/known-issues.yaml</a>;
+see <a href="https://github.com/{repo}/blob/master/README.md#known-issues">README.md</a>
+for what they mean for CI.</p>
 {"".join(render_issue(i, cells, repo) for i in issues)}
 <footer>
 Rows are backends (which filesystem), columns are targets (which suite).

@@ -4,23 +4,23 @@
 #
 # Generated with Claude Code
 #
-# Runner-side install of what bin/ci/run-checks.sh needs: shellcheck and
-# bats. Both are packaged everywhere we care about (Debian, Ubuntu), so
-# this is deliberately apt-only -- no vendored bats-core submodule, no
+# Runner-side install of what bin/ci/run-checks.sh needs. All of it is
+# packaged everywhere we care about (Debian, Ubuntu), so this is
+# deliberately apt-only -- no vendored bats-core submodule, no
 # bats-assert / bats-support.
 #
 # usage:
 #   bin/ci/install-check-deps.sh
 #
 # env overrides:
-#   EVAL_UNDER_CHECK_PKGS   packages to install   (shellcheck bats python3-yaml)
+#   EVAL_UNDER_CHECK_PKGS   packages to install (default: below)
 #
 # Idempotent: already-installed packages are left alone by apt-get.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-read -r -a PKGS <<<"${EVAL_UNDER_CHECK_PKGS:-shellcheck bats python3-yaml}"
+read -r -a PKGS <<<"${EVAL_UNDER_CHECK_PKGS:-shellcheck bats python3-yaml pyflakes3}"
 
 SUDO=()
 [ "$(id -u)" -eq 0 ] || SUDO=(sudo)

@@ -4,12 +4,12 @@
 # Known failures per cell and test. Drives the CI verdicts, the status
 # page and GOTCHAS.md's "Known issues" section; see README.md#known-issues.
 #
-# Fields:
-#   id        unique slug (anchor in GOTCHAS.md and on the status page)
-#   title     one line
-#   backends  globs over backend slugs (beegfs-*, nfs, loop-vfat, ...)
-#   targets   target names from matrix.yaml, or "*"
-#   tests     test ids, globs allowed; "*" = the whole cell (not yet
+# Fields (* = required):
+#   id*       unique slug (anchor in GOTCHAS.md and on the status page)
+#   title*    one line
+#   backends* globs over backend slugs (beegfs-*, nfs, loop-vfat, ...)
+#   targets*  target names from matrix.yaml, or "*"
+#   tests*    test ids, globs allowed; "*" = the whole cell (not yet
 #             narrowed down). A trailing `#107-108,118-120` expands like
 #             prove's "Failed tests:". Id formats:
 #               git        t0001-init.sh#13
@@ -17,22 +17,20 @@
 #               stress-ng  utime
 #               git-annex  Tests.Repo Tests v10 unlocked.Init Tests.add
 #                          (as `git annex test --list-tests` prints them)
-#             TAP scripts that die also report <file>#plan, <file>#exit
-#             or <file>#bailout.
+#             A TAP script also reports <file>#plan, <file>#exit or
+#             <file>#bailout when it dies, and a bare <file> when it
+#             skips everything.
 #   tags      from the vocabulary below
 #   links     upstream reports, GOTCHAS.md sections, ...
-#   notes     optional Markdown for GOTCHAS.md
+#   notes     Markdown, shown in GOTCHAS.md and on the status page
 #
 # After editing: bin/ci/known_issues.py gotchas
 
 tags:
   fs-limitation: The filesystem lacks the feature by design (vfat has no symlinks); will not change.
   fs-divergence: The filesystem performs the operation, but not the way POSIX or a local filesystem does.
-  tool-bug: A bug in the tool under test.
   test-assumption: The test suite assumes something the filesystem need not provide.
-  build-config: Our build of the tool (flags, dependencies), not the tool itself.
   harness: eval-under's own setup (image sizes, mount options, ...), not the filesystem.
-  fixed-upstream: Fixed upstream; waiting for the fix to reach what we run.
   needs-triage: Acknowledged, root cause not yet run down.
 
 issues:
@@ -46,8 +44,9 @@ issues:
     links: ["GOTCHAS.md#loop-vfat-is-not-a-posix-filesystem"]
     notes: |
       About half of pjdfstest's files fail, and the run ends in a bail-out
-      rather than a summary. Worth narrowing only if we ever want to diff
-      vfat mount-option variants against each other.
+      rather than a summary.
+    # Worth narrowing only if we ever want to diff vfat mount-option
+    # variants against each other.
 
   - id: vfat-utime
     title: stress-ng utime verification fails on vfat
@@ -102,9 +101,8 @@ issues:
       - "t1700-split-index.sh#23-24,26"
     tags: [needs-triage]
     links: ["GOTCHAS.md#loop-vfat-is-not-a-posix-filesystem"]
-    notes: |
-      Seeded from run 36050917994 (git v2.55.0). Split off into their own
-      issues as root causes are found.
+    # Seeded from run 36050917994 (git v2.55.0); split off into their own
+    # issues as root causes are found.
 
   # ----------------------------------------------------------------- NFS
   - id: nfs-chown-setid
@@ -115,6 +113,9 @@ issues:
       - "chown/00.t#107-108,118-120,129-130,137-138,148-150,159-160,167-168,178-180,189-190,197-198,208-210,219-220,227-228,238-240,249-250,257-258,268-270,279-280,287-288,598-599,601,613-615,617-618,634-635,637,649,652,664,668-669,685,688,700-701,703,715-717,719-720,736-737,739,751-752,754,766-768,770-771,787-788,790,802-803,805,817-819,821-822,838-839,841,853-854,856,868-870,872-873,889-890,892"
     tags: [fs-divergence]
     links: ["GOTCHAS.md#nfs-bineval-under-nfs"]
+    notes: |
+      106 of chown/00.t's 1280 assertions. The cell runs `--no-root-squash`;
+      under the default `root_squash` pjdfstest refuses to start at all.
 
   - id: nfs-pjdfstest-untriaged
     title: remaining pjdfstest failures on NFS
@@ -140,8 +141,8 @@ issues:
     tags: [fs-divergence, needs-triage]
     links: ["GOTCHAS.md#beegfs-bineval-under-beegfs"]
     notes: |
-      Identical assertions fail on 7.4.6 and 8.1.0. Seeded from run
-      36050917994; split by syscall once each is understood.
+      Identical assertions fail on 7.4.6 and 8.1.0.
+    # Seeded from run 36050917994; split by syscall once each is understood.
 
   - id: beegfs-annex-export-busy
     title: git-annex export/import fails on BeeGFS with EBUSY on rename
@@ -155,18 +156,13 @@ issues:
     links:
       - https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/
       - "GOTCHAS.md#beegfs--git-annex-test"
-    notes: |
-      Working hypothesis: our git-annex build lacks OsPath support, which
-      upstream's builds have.
 
   # --------------------------------------------------------- loop images
   - id: loop-annex-diskreserve
-    title: git-annex test on a 100 MB loop image runs into annex.diskreserve
+    title: git-annex test on a loop image no larger than annex.diskreserve
+    # Not loop-*: a new loop row should not inherit a whole-cell issue.
     backends: [loop-vfat, loop-ext4]
     targets: [git-annex]
     tests: ["*"]
     tags: [harness, needs-triage]
     links: ["GOTCHAS.md#loop-git-annex-cells-annexdiskreserve"]
-    notes: |
-      Backends listed explicitly so a new loop-* row does not inherit a
-      whole-cell issue.

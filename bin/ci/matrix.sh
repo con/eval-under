@@ -87,6 +87,7 @@ export EVAL_UNDER_GIT_REF EVAL_UNDER_PJDFSTEST_REF
 
 # Filename-safe identifier for a backend cell: "beegfs-7.4.6", "nfs",
 # "loop-vfat".
+# Keep in sync with backend_slug() in bin/ci/evals.py.
 backend_slug() {
     local backend="$1" version="$2"
     if [ "$version" = "n/a" ]; then
@@ -132,10 +133,8 @@ target_loop_size_mb() { echo "${_EU_LOOP_MB[$1]:-100}"; }
 target_needs_root()      { [ "${_EU_NEEDS_ROOT[$1]:-0}" = 1 ]; }
 target_needs_git_annex() { [ "${_EU_NEEDS_GA[$1]:-0}" = 1 ]; }
 
-# Where a cell's machine-readable outputs go: suite.log and suite.rc
-# (run-under.sh), results.tsv (collect-results.py) and verdict.json
-# (known_issues.py check). On the runner's disk, not the mount, so they
-# survive teardown.
+# Where a cell's logs and results go: on the runner's disk, not the
+# mount, so they survive teardown.
 cell_output_dir() {
     echo "${EVAL_UNDER_OUTPUT_DIR:-/tmp/eval-under-output/$(cell_slug "$1" "$2" "$3")}"
 }

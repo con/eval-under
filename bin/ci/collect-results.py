@@ -4,27 +4,20 @@
 #
 # Generated with Claude Code
 #
-# Turn one suite's own output into <cell-dir>/results.tsv (test id TAB
-# outcome [TAB detail], after `# key: value` header lines), the input to
+# Turn one suite's own output into <cell-dir>/results.tsv, the input to
 # `known_issues.py check`. Test id formats: see evals/known-issues.yaml.
 #
-# Each parse is cross-checked against the totals the suite prints itself
-# (prove's "Files=N, Tests=M", tasty's "N out of M tests failed"); any
-# disagreement records the results as incomplete rather than guessing.
-#
-# usage:
-#   bin/ci/collect-results.py <target> <cell-dir> [--git-t <git's t/ dir>]
-#
-# Exits 0 even for incomplete results: known_issues.py decides what that
-# means.
+# Each parse is cross-checked against the totals the suite prints itself;
+# any disagreement records the results as incomplete rather than guessing.
 
 from __future__ import annotations
 
 import argparse
 import re
-import sys
 from collections import Counter
 from pathlib import Path
+
+from evals import Row, write_results
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 TAP_LINE = re.compile(
@@ -32,8 +25,8 @@ TAP_LINE = re.compile(
     r"(?:\s*#\s*(?P<dir>TODO|SKIP)\b\s*(?P<why>.*))?$", re.IGNORECASE)
 TAP_PLAN = re.compile(r"^1\.\.(?P<n>\d+)(?:\s+#\s*(?P<skip>SKIP.*))?$", re.IGNORECASE)
 TAP_BAIL = re.compile(r"^Bail out!\s*(?P<why>.*)$")
-# What prove prints (to stderr, so anywhere in the log) instead of
-# passing the TAP "Bail out!" line through.
+# What prove prints instead of passing the TAP "Bail out!" line through;
+# not necessarily right after the file that bailed.
 PROVE_BAIL = re.compile(r"^Bailout called\.\s+Further testing stopped:\s*(?P<why>.*)$")
 PROVE_TOTALS = re.compile(r"^Files=(?P<files>\d+), Tests=(?P<tests>\d+),")
 
@@ -79,21 +72,17 @@ class TapFile:
             detail = (m.group("desc") or "").strip()
             if m.group("dir"):
                 detail = f"{detail} # {m.group('dir').upper()} {m.group('why')}".strip()
-            outcome = tap_outcome(m)
             if n in self.points:
-                # Stray TAP-like output; never let it mask a failure (the
-                # collectors then refuse the cell via check_no_dupes).
-                self.dupes += 1
-                if self.points[n][0] == "fail":
-                    return
-            self.points[n] = (outcome, detail)
+                self.dupes += 1         # see check_no_dupes
+                return
+            self.points[n] = (tap_outcome(m), detail)
             return
         m = TAP_PLAN.match(line)
         if m:
             self.plan = int(m.group("n"))
             self.skip_all = m.group("skip") or ""
 
-    def rows(self, exit_code: int | None) -> list[tuple[str, str, str]]:
+    def rows(self, exit_code: int | None) -> list[Row]:
         if self.plan == 0 and not self.points:
             return [(self.name, "skip", self.skip_all)]
         rows = [(f"{self.name}#{n}", o, d) for n, (o, d) in sorted(self.points.items())]
@@ -132,17 +121,17 @@ def check_tap_totals(files: list[TapFile], lines: list[str]) -> None:
 
 
 # --------------------------------------------------------------------------
-# adapters: (suite.log lines, args) -> rows
+# adapters: suite.log lines -> rows
 
-def collect_git(lines: list[str], a) -> list:
+def collect_git(lines: list[str], git_t: Path | None) -> list[Row]:
     """From the <script>.tap/.exit files bin/ci/git-prove-exec.sh writes."""
-    if a.git_t is None:
-        sys.exit("collect-results.py: --git-t is required for target git")
-    results = a.git_t / "test-results"
+    if git_t is None:
+        raise Incomplete("--git-t not given")
+    results = git_t / "test-results"
     if not results.is_dir():
         raise Incomplete(f"no git test-results directory at {results}")
     files = []
-    rows: list[tuple[str, str, str]] = []
+    rows: list[Row] = []
     for tap in sorted(results.glob("t[0-9]*.tap")):
         tf = TapFile(tap.name[:-len(".tap")] + ".sh")
         for ln in clean_lines(tap):
@@ -164,7 +153,7 @@ PROVE_HEADER = re.compile(r"^(?:\[[\d:]+\]\s+)?(?P<file>\S+\.t) \.+\s*$")
 PROVE_WSTAT = re.compile(r"^(?P<file>\S+\.t)\s+\(Wstat: (?P<wstat>\d+)")
 
 
-def collect_pjdfstest(lines: list[str], a) -> list:
+def collect_pjdfstest(lines: list[str]) -> list[Row]:
     def rel(p: str) -> str:
         return p.split("/tests/", 1)[-1]
 
@@ -205,9 +194,8 @@ def collect_pjdfstest(lines: list[str], a) -> list:
     return rows
 
 
-def collect_stress_ng(lines: list[str], a) -> list:
-    """From the TAP target-stress-ng.sh prints; the description's first
-    word is the stressor, used as the test id."""
+def collect_stress_ng(lines: list[str]) -> list[Row]:
+    """From the TAP target-stress-ng.sh prints."""
     tf = TapFile("stress-ng")
     for ln in lines:
         tf.feed(ln)
@@ -218,7 +206,7 @@ def collect_stress_ng(lines: list[str], a) -> list:
         raise Incomplete(f"stress-ng TAP planned {tf.plan}, parsed {len(tf.points)}")
     rows = []
     for o, d in tf.points.values():
-        name, _, detail = d.partition(" ")
+        name, _, detail = d.partition(" ")     # the stressor, then the rest
         rows.append((name, o, detail))
     return rows
 
@@ -238,12 +226,8 @@ def indent(ln: str) -> int:
 
 
 def child_indent(lines: list[str], k: int, ind: int) -> int | None:
-    """Indent of the first line after lines[k] that is nested under it.
-
-    Skips the stderr noise that can sit between a group header and its
-    first child (at indent <= ind), but gives up at the first sibling or
-    ancestor *result*, which proves lines[k] has no children.
-    """
+    """Indent of the first line nested under lines[k], looking past noise
+    but not past a sibling or ancestor result."""
     for x in lines[k + 1:k + MAX_LOOKAHEAD]:
         if not x.strip():
             continue
@@ -255,7 +239,7 @@ def child_indent(lines: list[str], k: int, ind: int) -> int | None:
     return None
 
 
-def collect_git_annex(lines: list[str], a) -> list:
+def collect_git_annex(lines: list[str]) -> list[Row]:
     """Parse tasty's console tree.
 
     The console is the only complete record: git-annex runs its test
@@ -267,10 +251,10 @@ def collect_git_annex(lines: list[str], a) -> list:
     `Tests` and closing with a count line. Two kinds of noise must be kept
     out of the group path:
 
-    - git-annex's own stderr ("not enough free space ...", "Detected a
-      crippled filesystem.") lands at a group header's indentation. A
+    - git-annex's own messages ("not enough free space ...", "Detected a
+      crippled filesystem.") land at a group header's indentation. A
       real header is always followed by a line one level (2 spaces)
-      deeper; stderr is not, so that lookahead is the test.
+      deeper; a message is not.
     - failure transcripts contain column-0 lines ("failed", progress
       bars). Nothing legitimate inside a run sits at column 0.
     """
@@ -337,29 +321,28 @@ def collect_git_annex(lines: list[str], a) -> list:
     return [(tid, o, "") for tid, o in worst.items()]
 
 
-ADAPTERS = {
-    "git": collect_git,
-    "pjdfstest": collect_pjdfstest,
-    "stress-ng": collect_stress_ng,
-    "git-annex": collect_git_annex,
-}
-
-
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Exits 0 even for incomplete results: known_issues.py judges those.")
     ap.add_argument("target")
     ap.add_argument("cell_dir", type=Path)
     ap.add_argument("--git-t", type=Path, help="git's t/ directory (target git only)")
     a = ap.parse_args()
 
+    adapters = {
+        "git": lambda lines: collect_git(lines, a.git_t),
+        "pjdfstest": collect_pjdfstest,
+        "stress-ng": collect_stress_ng,
+        "git-annex": collect_git_annex,
+    }
     log = a.cell_dir / "suite.log"
     rows, reason = [], ""
     try:
         if not log.is_file():
             raise Incomplete(f"no {log}")
-        if a.target not in ADAPTERS:
+        if a.target not in adapters:
             raise Incomplete(f"no results adapter for target {a.target!r}")
-        rows = ADAPTERS[a.target](clean_lines(log), a)
+        rows = adapters[a.target](clean_lines(log))
     except Incomplete as e:
         reason = str(e)
     dup = [i for i, n in Counter(r[0] for r in rows).items() if n > 1]
@@ -367,13 +350,7 @@ def main() -> int:
         reason = f"{len(dup)} duplicate test id(s), e.g. {dup[0]!r}"
 
     out = a.cell_dir / "results.tsv"
-    with out.open("w") as fh:
-        fh.write(f"# complete: {'no' if reason else 'yes'}\n")
-        if reason:
-            fh.write(f"# reason: {reason}\n")
-        for tid, outcome, detail in rows:
-            fh.write("\t".join([tid, outcome] + ([detail.replace("\t", " ")] if detail else []))
-                     + "\n")
+    write_results(out, rows, reason)
     c = Counter(r[1] for r in rows)
     print(f"I: {out}: {len(rows)} result(s) "
           + " ".join(f"{k}={v}" for k, v in sorted(c.items()))

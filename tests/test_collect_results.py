@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "tests" / "data"
 sys.path.insert(0, str(ROOT / "bin" / "ci"))
 
-import known_issues  # noqa: E402
+import evals  # noqa: E402
 
 
 def collect(target: str, log: Path, *extra: str) -> tuple[dict, dict]:
@@ -25,7 +25,7 @@ def collect(target: str, log: Path, *extra: str) -> tuple[dict, dict]:
         shutil.copy(log, Path(tmp) / "suite.log")
         subprocess.run([sys.executable, ROOT / "bin/ci/collect-results.py", target, tmp, *extra],
                        check=True, capture_output=True)
-        header, rows = known_issues.read_results(Path(tmp) / "results.tsv")
+        header, rows = evals.read_results(Path(tmp) / "results.tsv")
     return header, dict(rows)
 
 
@@ -49,6 +49,22 @@ class TestGit(unittest.TestCase):
         self.assertEqual(h["complete"], "no")
         self.assertIn("prove reports", h["reason"])
 
+    def test_repeated_number_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = Path(tmp) / "t/test-results"
+            res.mkdir(parents=True)
+            (res / "t0000-x.tap").write_text("ok 1\nnot ok 2 - real\nok 2 - stray\n1..2\n")
+            (res / "t0000-x.exit").write_text("1\n")
+            log = Path(tmp) / "suite.log"
+            log.write_text("Files=1, Tests=2, 0 wallclock secs\n")
+            h, _ = collect("git", log, "--git-t", str(Path(tmp) / "t"))
+        self.assertEqual(h["complete"], "no")
+        self.assertIn("duplicate TAP test numbers", h["reason"])
+
+    def test_no_git_t_is_incomplete(self):
+        h, _ = collect("git", DATA / "git/suite.log")
+        self.assertEqual(h["complete"], "no")
+
 
 class TestPjdfstest(unittest.TestCase):
     def test_outcomes(self):
@@ -64,6 +80,20 @@ class TestPjdfstest(unittest.TestCase):
         h, r = collect("pjdfstest", DATA / "pjdfstest-bailout/suite.log")
         self.assertEqual(h["complete"], "yes", h.get("reason"))
         self.assertEqual(r["a/01.t#bailout"], "fail")
+
+
+class TestResultsFile(unittest.TestCase):
+    def test_round_trip_and_bad_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "results.tsv"
+            evals.write_results(f, [("#odd", "pass", "a\tb"), ("x", "fail", "")])
+            self.assertEqual(evals.read_results(f),
+                             ({"complete": "yes"}, [("#odd", "pass"), ("x", "fail")]))
+            f.write_text(f.read_text() + "y\tbogus\n")
+            h, rows = evals.read_results(f)
+        self.assertEqual(h["complete"], "no")
+        self.assertIn("bogus", h["reason"])
+        self.assertEqual(len(rows), 2)
 
 
 class TestStressNg(unittest.TestCase):

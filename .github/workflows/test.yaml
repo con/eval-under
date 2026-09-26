@@ -117,7 +117,7 @@ jobs:
             ${{ env.EVAL_UNDER_OUTPUT_DIR }}/**
           if-no-files-found: ignore
 
-      # One tiny artifact per cell, read back by the `badges` job. A
+      # One tiny artifact per cell, read back by the `publish` job. A
       # matrix job cannot contribute to a `needs.*.outputs` map, so this
       # is how a fan-out reports 20 individual verdicts to a fan-in.
       - name: Record cell result

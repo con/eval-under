@@ -10,8 +10,8 @@
 # <script>.exit, for bin/ci/collect-results.py.
 #
 # Why not git's own records: --verbose-log's .out files interleave command
-# output with the TAP (nested TAP streams, lines glued to "ok N"), and
-# --write-junit-xml breaks skip-all scripts (as of v2.55.0).
+# output with the TAP, and --write-junit-xml breaks skip-all scripts (as of
+# v2.55.0).
 
 set -euo pipefail
 
@@ -23,9 +23,9 @@ USAGE
 }
 
 case "${1:-}" in
-    ""|-h|--help) usage; exit 2 ;;
+    -h|--help) usage; exit 0 ;;
     *.sh) ;;
-    *) exec ./run-test.sh "$@" ;;       # unit tests: nothing to capture
+    *) usage >&2; exit 2 ;;
 esac
 
 base="test-results/$(basename "$1" .sh)"

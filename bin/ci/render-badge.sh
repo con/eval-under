@@ -36,8 +36,6 @@ TITLE="${2:-}"
 
 # Colours match the shields.io "flat" palette so these sit comfortably
 # next to any conventional badge elsewhere in the README.
-# Known failures stay red: the badge reports the filesystem, not our
-# expectations.
 case "$STATUS" in
     success|passing) text="passing";   color="#4c1" ;;
     failure|failing-known) text="failing"; color="#e05d44" ;;

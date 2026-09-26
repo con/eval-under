@@ -36,6 +36,9 @@ jobs:
       - name: shellcheck
         run: bin/ci/run-checks.sh shellcheck
 
+      - name: pyflakes
+        run: bin/ci/run-checks.sh pyflakes
+
       - name: bats
         run: bin/ci/run-checks.sh bats
 

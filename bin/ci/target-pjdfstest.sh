@@ -23,11 +23,8 @@
 #
 # env:
 #   EVAL_UNDER_SRC_DIR         where install-target.sh built pjdfstest
-#   EVAL_UNDER_PJDFSTEST_ARGS  `prove` args (default: -v -r). -v is what
-#                              puts every assertion's TAP line in the log,
-#                              which bin/ci/collect-results.py needs for
-#                              per-assertion results; drop it and the cell
-#                              reports incomplete.
+#   EVAL_UNDER_PJDFSTEST_ARGS  `prove` args (default: -v -r; without -v
+#                              the cell reports incomplete)
 #   TMPDIR                     <mount> -- the suite runs with cwd here
 
 set -euo pipefail

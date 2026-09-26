@@ -32,5 +32,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 out="$(cell_output_dir "$1" "$2" "$3")"
 mkdir -p "$out"
 
-"$here/collect-results.py" "$3" "$out" --git-t "$EVAL_UNDER_SRC_DIR/git/t"
+# A collector crash leaves no results.tsv, which the check reports as incomplete.
+rm -f "$out/results.tsv"
+"$here/collect-results.py" "$3" "$out" --git-t "$EVAL_UNDER_SRC_DIR/git/t" \
+    || echo "W: collect-results.py exited $?" >&2
 exec "$here/known_issues.py" check "$1" "$2" "$3" "$out"
