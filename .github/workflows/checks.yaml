@@ -1,0 +1,45 @@
+name: checks
+
+# The repo's own checks: shellcheck over every script we ship, plus the
+# bats suite for the `eval-under` CLI entry point. Minutes rather than
+# the hour test.yaml's filesystem matrix takes, and it needs no root, no
+# kernel module and no cluster -- so it runs on everything, unfiltered
+# by paths.
+#
+# The two check steps are one-liners into bin/ci/ (see .claude/CLAUDE.md
+# -- the logic they invoke is shellcheck'able and runs locally as
+# `bin/ci/run-checks.sh`).
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 for the tags: the version tests describe this very
+      # checkout, and `git describe` in a shallow clone finds no tag to
+      # report.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install shellcheck + bats
+        run: bin/ci/install-check-deps.sh
+
+      - name: shellcheck
+        run: bin/ci/run-checks.sh shellcheck
+
+      - name: bats
+        run: bin/ci/run-checks.sh bats
