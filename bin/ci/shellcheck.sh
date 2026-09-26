@@ -18,7 +18,11 @@
 #   --list   only print the scripts that would be checked
 #
 # Extra arguments go to shellcheck, e.g. `bin/ci/shellcheck.sh -S style`.
-# Run from anywhere inside the repository.
+# Run from anywhere inside the repository. In CI it runs as part of
+# `bin/ci/run-checks.sh shellcheck` (.github/workflows/checks.yaml).
+#
+# env:
+#   SHELLCHECK   shellcheck binary to use (default: shellcheck)
 
 set -euo pipefail
 
@@ -46,11 +50,12 @@ if [ "${1:-}" = "--list" ]; then
 fi
 
 [ "${#scripts[@]}" -gt 0 ] || { echo "no shell scripts found" >&2; exit 1; }
-command -v shellcheck >/dev/null || {
+SHELLCHECK="${SHELLCHECK:-shellcheck}"
+command -v "$SHELLCHECK" >/dev/null || {
     echo "shellcheck not found -- apt-get install shellcheck" >&2
     exit 1
 }
 
-echo "I: $(shellcheck --version | sed -n 's/^version: //p'): ${#scripts[@]} script(s)"
-shellcheck "$@" "${scripts[@]}"
+echo "I: shellcheck $("$SHELLCHECK" --version | sed -n 's/^version: //p'): ${#scripts[@]} script(s)"
+"$SHELLCHECK" "$@" "${scripts[@]}"
 echo "I: all clean"

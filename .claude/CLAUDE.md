@@ -43,7 +43,7 @@ from the workflow. Rationale:
    runners.
 3. Scripts pass `shellcheck` cleanly. Run `bin/ci/shellcheck.sh`
    (every tracked file with a sh/bash shebang -- the same check the
-   Shellcheck workflow runs) before committing. If a warning is a genuine
+   `checks` workflow runs via `bin/ci/run-checks.sh`) before committing. If a warning is a genuine
    false positive, silence with a targeted `# shellcheck disable=SCxxxx`
    annotation and a one-line comment explaining why -- do not blanket-
    suppress at file scope.

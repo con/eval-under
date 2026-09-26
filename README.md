@@ -239,7 +239,7 @@ into `bin/eval-under`, bumped with each release tag.
 | `bin/ci/collect-results.py`              | Turns a suite's output (TAP / tasty) into per-test `results.tsv`                   |
 | `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
 | `bin/ci/check-cell.sh`                   | Runs those two for one cell; its exit status is the job's verdict                  |
-| `bin/ci/shellcheck.sh`                   | shellcheck every tracked shell script (found by shebang); also run in CI           |
+| `bin/ci/shellcheck.sh`                   | shellcheck every tracked shell script (found by shebang); run by `run-checks.sh`  |
 | `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                       |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
 | `bin/ci/update-status.py`                | Merges a run's per-cell results into the persistent `status.json`                  |

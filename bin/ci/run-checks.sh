@@ -48,9 +48,11 @@ need() {
 run_shellcheck() {
   need "$SHELLCHECK" shellcheck || return 1
   log "shellcheck"
-  # The .bats files are deliberately excluded: shellcheck cannot parse
-  # bats' @test syntax.
-  ( cd "$root" && "$SHELLCHECK" bin/ci/*.sh bin/eval-under* provision/*.sh )
+  # Every tracked sh/bash script, found by shebang rather than by glob
+  # (bin/ci/shellcheck.sh). The .bats files are not picked up: their
+  # `#!/usr/bin/env bats` is no shell shebang, and shellcheck cannot
+  # parse bats' @test syntax anyway.
+  ( cd "$root" && SHELLCHECK="$SHELLCHECK" "$here/shellcheck.sh" )
 }
 
 run_bats() {
