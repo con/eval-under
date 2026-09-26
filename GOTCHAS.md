@@ -312,6 +312,9 @@ copying, and the add succeeds. Measured on a loopback mount here:
 | `git annex add`, `annex.addunlocked=true` | **failed to link to annex** | ok | ok |
 | `git clone <local path>` | **fatal: hardlink different from source** | ok | ok |
 
+Both rows marked failing here are red in CI as well, on the
+`sshfs (loopback)` matrix cells, which is what those cells are for.
+
 So a filesystem that advertises hardlinks it cannot express is worse than
 one that admits it has none: every caller here has a copy fallback, and
 only the honest failure reaches it. Worth suggesting to a reporter as a
@@ -347,9 +350,12 @@ Two established causes account for most of it:
   permitted`, and `t0052-simple-ipc` (9/9), whose server never comes up.
   `unix-socket=no` in the capability profile predicts both.
 
-Measured locally against an ext4 control, whole suite (174 scripts,
-10366 assertions): 166 failed assertions in 24 scripts. The remainder
-are small and **not** yet explained -- `t0003-attributes` (6),
+Measured against an ext4 control, whole suite (174 scripts, 10366
+assertions): 166 failed assertions in 24 scripts locally, 179 in the CI
+run of the same commit. Treat the count as "of order 170", not exact --
+it moves by ~10 between runs of the same tree, which is itself worth
+knowing before reading a delta as a regression. The two causes above
+dominate it either way. The remainder are small and **not** yet explained -- `t0003-attributes` (6),
 `t1091-sparse-checkout-builtin` (8), `t0610-reftable-basics` (3),
 `t0021-conversion` (3), and ten scripts with one each. Do not assume
 they share a cause with the two above.
