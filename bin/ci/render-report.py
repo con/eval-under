@@ -47,6 +47,7 @@ KNOWN_RED = {
     "nfs-pjdfstest": "NFS chown/setuid divergence (106 of 1280 assertions)",
     "loop-ext4-git-annex": "pre-existing, predates this harness",
     "sshfs-git-annex": "sshfs hardlinks are invisible: link() succeeds, st_ino differs",
+    "sshfs-git": "same cause: local git clone verifies its hardlinks by st_ino",
 }
 
 STATE = {

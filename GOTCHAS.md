@@ -302,8 +302,78 @@ does the ingest. `git add` through the annex filter writes a pointer and
 succeeds, which is why git-annex's own `Repo Tests v10 unlocked` group is
 green while `annex.addunlocked=true` in a plain v10 repo fails.
 
-`sshfs (loopback) / git testsuite` is the control: the same mount, a suite
-that never hardlinks into an object store.
+`-o disable_hardlink` fixes it, counter-intuitively: sshfs then fails
+`link()` with `EPERM` instead of pretending, git-annex falls back to
+copying, and the add succeeds. Measured on a loopback mount here:
+
+| | sshfs default | sshfs `-o disable_hardlink` | ext4 |
+| --- | --- | --- | --- |
+| `git annex add` (locked) | ok | ok | ok |
+| `git annex add`, `annex.addunlocked=true` | **failed to link to annex** | ok | ok |
+| `git clone <local path>` | **fatal: hardlink different from source** | ok | ok |
+
+So a filesystem that advertises hardlinks it cannot express is worse than
+one that admits it has none: every caller here has a copy fallback, and
+only the honest failure reaches it. Worth suggesting to a reporter as a
+mount option before anything else.
+
+### `sshfs (loopback) / git testsuite`
+
+Red, and not for the reason first assumed: git's suite *does* hardlink
+into an object store. `git clone <local path>` hardlinks each object and
+then sanity-checks the result, comparing `st_mode`, `st_ino`, `st_dev`,
+`st_size`, `st_uid` and `st_gid` against the source
+(`builtin/clone.c`). sshfs synthesises `st_ino` per path, so the
+comparison fails and the clone dies:
+
+```
+$ git clone a b
+fatal: hardlink different from source at 'b/.git/objects/a1/dffc7a...'
+```
+
+**Plain `git clone` of a local path does not work on sshfs at all.** That
+is a broader statement than the git-annex one above, and the same
+mechanism. `git clone --no-hardlinks` and `git clone file://...` both
+work, as does `-o disable_hardlink` per the table above.
+
+Two established causes account for most of it:
+
+- **local clone hardlink verification** -- `t1507-rev-parse-upstream`
+  (20), `t1013-read-tree-submodule` (58), `t0035-safe-bare-repository`
+  (2). Each does a local clone or adds a submodule (which clones) in
+  setup, so one failed setup cascades through the script.
+- **no unix sockets** -- `t0301-credential-cache` (37), which reports
+  `fatal: unable to bind to '.../credential/socket': Operation not
+  permitted`, and `t0052-simple-ipc` (9/9), whose server never comes up.
+  `unix-socket=no` in the capability profile predicts both.
+
+Measured locally against an ext4 control, whole suite (174 scripts,
+10366 assertions): 166 failed assertions in 24 scripts. The remainder
+are small and **not** yet explained -- `t0003-attributes` (6),
+`t1091-sparse-checkout-builtin` (8), `t0610-reftable-basics` (3),
+`t0021-conversion` (3), and ten scripts with one each. Do not assume
+they share a cause with the two above.
+
+Reproduce a single script rather than the suite:
+
+```bash
+sudo bin/eval-under sshfs --set-home -- \
+  env EVAL_UNDER_GIT_TESTS=t1507-rev-parse-upstream.sh bin/ci/target-git.sh
+```
+
+Two things this cell taught the harness, recorded so they are not
+re-learned:
+
+- `not ok N ... # TODO known breakage` is git's `test_expect_failure`, a
+  TAP TODO directive that prove counts as an expected result. Counting
+  those as failures had this cell reporting 351 failed assertions where
+  prove saw 166, with `t1517-outside-repo` (104) and
+  `t0450-txt-doc-vs-help` (54) -- both of which prove reports as **ok**
+  -- looking like the worst offenders. `bin/ci/dump-failure-logs.sh` now
+  excludes the directive.
+- A script that fails only in the full run is not automatically a
+  concurrency effect. Both scripts above pass in isolation *and* in the
+  full suite; it was the counting that differed, not the filesystem.
 
 ### `sshfs (loopback) / stress-ng`, `sshfs (loopback) / pjdfstest` -- no cells
 
