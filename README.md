@@ -84,8 +84,9 @@ failure inside an already-red cell -- and notices when an upstream fix
 (say, a new git-annex daily build) makes a known issue go away.
 
 This needs per-test results, which `bin/ci/collect-results.py` derives
-from what each suite already emits: git's own JUnit XML
-(`--write-junit-xml`), TAP for `pjdfstest` and our `stress-ng` driver,
+from what each suite already emits: TAP for `git` (the stream prove
+parses, kept per script by `bin/ci/git-prove-exec.sh`), `pjdfstest`
+and our `stress-ng` driver,
 tasty's console tree for `git annex test` (upstream
 TODO for a TAP log:
 [provide TAP protocol logging for 'annex test'](https://git-annex.branchable.com/todo/provide_TAP_protocol_logging_for___39__annex_test__39__/)).

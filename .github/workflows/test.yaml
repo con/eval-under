@@ -130,7 +130,6 @@ jobs:
           path: |
             /var/log/beegfs-*
             /opt/eval-under-src/git/t/test-results/**
-            /opt/eval-under-src/git/t/out/**
             ${{ env.EVAL_UNDER_OUTPUT_DIR }}/**
           if-no-files-found: ignore
 
