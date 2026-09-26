@@ -74,10 +74,19 @@ if [ "$TARGET" = "git" ]; then
     echo "=== git testsuite failures ($results) ==="
     if [ -d "$results" ]; then
         # Pass 1: which scripts failed, and how badly.
+        #
+        # `not ok N ... # TODO known breakage` is git's test_expect_failure:
+        # a TAP TODO directive, which prove counts as an expected result and
+        # not as a failure -- a script whose only "not ok" lines are TODOs is
+        # reported ok by the harness. Counting them here inflated every git
+        # cell (the sshfs cell read 351 failed assertions where prove saw
+        # 166, and two scripts prove called ok appeared as the worst
+        # offenders at 104 and 54), which sends triage after failures that do
+        # not exist. Exclude the directive, and match prove.
         names=() counts=()
         for out in "$results"/*.out; do
             [ -e "$out" ] || continue
-            n="$(grep -c '^not ok ' "$out" 2>/dev/null || true)"
+            n="$(grep '^not ok ' "$out" 2>/dev/null | grep -vc '# TODO' || true)"
             [ "${n:-0}" -gt 0 ] || continue
             names+=("$(basename "${out%.out}")")
             counts+=("$n")
@@ -94,7 +103,7 @@ if [ "$TARGET" = "git" ]; then
                 shown=$((shown + 1))
                 out="$results/${names[$i]}.out"
                 echo "--- ${names[$i]}: ${counts[$i]} failed ---"
-                grep '^not ok ' "$out" | head -40 || true
+                grep '^not ok ' "$out" | grep -v '# TODO' | head -40 || true
                 echo "  ... last $GIT_DUMP_TAIL_LINES lines of ${names[$i]}.out:"
                 tail -"$GIT_DUMP_TAIL_LINES" "$out" | sed 's/^/  | /' || true
                 echo
