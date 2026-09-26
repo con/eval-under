@@ -75,6 +75,117 @@ So `--no-root-squash` (env: `EVAL_UNDER_NFS_NO_ROOT_SQUASH`) exports with
 user would. The loop and BeeGFS backends already run the wrapped command
 as root, so the flag is a no-op there.
 
+### sshfs (`bin/eval-under-sshfs`)
+
+A throwaway sshd is started on the first free port at or above 2222 --
+its own host key, its own `authorized_keys`, its own pid file, all inside
+the run's scratch directory -- and a fresh backing directory is
+sshfs-mounted back over it. The system sshd is not used and
+`~/.ssh/authorized_keys` is never written to. With `--host` it mounts a
+real remote instead, using the caller's ssh config.
+
+| Knob | Value | Why |
+| --- | --- | --- |
+| Port | first free `>= 2222` | Two runs at once (a reproduction while a suite is going, two CI cells on one runner) must not collide. `--port` pins it. |
+| `-o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3` | always | A dropped connection should fail the command, not wedge it forever. |
+| `-o cache=no` | only with `--no-cache` | sshfs caches attributes by default, which hides stale-stat behaviour. This turns off sshfs's own cache, not all caching -- the kernel's 1-second attribute timeout still applies, and the stale-size effect above survives it. On is what users actually have. |
+| `-o workaround=rename` | only with `--workaround rename` | Makes sshfs emulate rename-over-existing by unlinking first -- non-atomic, which is what SFTP servers without the POSIX-rename extension force. |
+| Mount/command user | the invoking user | A FUSE mount belongs to whoever ran `sshfs`; root cannot read it without `allow_other`. Same treatment `eval-under-nfs` gives `root_squash`. |
+
+**Hardlinks exist but are not observable, and that is the whole story
+for git-annex.** `ln a b` succeeds over SFTP, and then `a` and `b` report
+*different* inode numbers and `nlink=1` each:
+
+```
+ext4     name=a ino=1884275 nlink=2      name=b ino=1884275 nlink=2
+sshfs    name=a ino=3       nlink=1      name=b ino=4       nlink=1
+```
+
+This is not a misconfiguration, and the link is not fake: in the backing
+directory on the server both names really do share one inode with
+`nlink=2`. What SFTP cannot carry is *identity* -- its attribute record
+has neither an inode number nor a link count -- so sshfs synthesises an
+`st_ino` per path and reports `nlink=1` for everything. There is no knob
+for it: `use_ino` (removed in libfuse 3) only ever passed through inode
+numbers that a filesystem supplies, and sshfs has none to supply, so it
+would not have helped under FUSE2 either; sshfs 3.7 offers only
+`disable_hardlink`, which makes `link()` fail outright.
+
+Worse than invisible, and worth knowing when a report mentions truncated
+files: immediately after writing one name, the *other* name still reads
+back with size 0 through the mount -- with `-o cache=no` as well. The
+capability probe reports the inode half as
+`hardlink-same-inode=no` / `hardlink-nlink=no` while `hardlink=yes` --
+which is exactly why those two checks exist. `hardlink` alone called
+sshfs healthy.
+
+What it costs, measured with git-annex 10.20240129:
+
+- `git annex add` on a **locked** branch: fine. The file becomes a
+  symlink into `.git/annex/objects`, and symlinks work.
+- **Any unlocked `git annex add`: fails** -- `foo failed to link to
+  annex`. add hardlinks the content into the annex and then verifies the
+  link, and the verification cannot succeed on a filesystem where the
+  link is invisible. This is not limited to an adjusted branch: a plain
+  v10 repo fails identically with `annex.addunlocked=true` in git
+  config, set through `git annex config`, or passed as `-c`.
+- `git add` through git's own filter (with `annex.largefiles` matching):
+  **fine** -- the pointer is committed and `git annex fsck` is clean.
+  So is `git annex unlock` of an already-committed file.
+- `git clone` of a local repo: **fails** --
+  `fatal: hardlink different from source at '...'`. git's local-clone
+  path hardlinks objects and runs the same check.
+
+So the boundary is not locked-vs-unlocked, and not adjusted-vs-plain:
+it is **who does the ingest**. git-annex hardlinking content into the
+annex fails; git's filter writing a pointer does not.
+
+That distinction is easy to get backwards from the test suite alone,
+because `git annex test` shows `Repo Tests v10 unlocked` **green** and
+only `v10 adjusted unlocked branch` red (11 of 12 in its Init Tests
+group, once `add` fails). The green group is not evidence that unlocked
+repos are fine here -- the suite's unlocked mode ingests with `git add`.
+An earlier revision of this file drew exactly that inference and was
+wrong.
+
+It matters for DataLad, which calls `git annex add`: plain v10 unlocked
+repos break for it too, not just adjusted ones.
+
+**`git annex test` wedges partway through, reproducibly.** Both
+full-suite runs stopped at the same place -- `Remote Tests / unavailable
+remote / removeKey` -- and sat there until killed (15+ minutes on the
+second). On ext4 that same test takes **0.02s and passes**, and the whole
+suite finishes in 1m21s.
+
+It is not an I/O hang. While wedged:
+
+- the mount stays responsive (`ls` returns immediately),
+- git-annex holds **no open files on the mount and no sockets**,
+- its threads sit in `futex_do_wait` / `ep_poll`, with no child
+  processes outstanding.
+
+That is a process waiting on something internal, not one blocked on the
+filesystem. Note also that git-annex sets `annex.sshcaching = false` here
+on its own, because ssh control sockets need unix sockets and this mount
+has none -- so the run is already on a different code path from a normal
+one.
+
+Two caveats before anyone reports this upstream: the same test passes in
+seconds when selected on its own with `-p '/unavailable remote/'`, so it
+needs the full-suite context; and this was git-annex 10.20240129 from
+Ubuntu 24.04, not a daily build. Re-run it through the reproduce
+workflow, which installs the daily build from con/git-annex, before
+filing anything.
+
+**Timestamps are quantised to the second.** Five files created back to
+back get one or two distinct mtimes, where every other filesystem
+measured gives five. Nothing else in the matrix has a clock this coarse,
+which makes sshfs the row that exercises git's racy-timestamp handling.
+
+**No fifos, no unix sockets.** git-annex says so itself at init
+("Detected a filesystem without fifo support") and adapts. Worth knowing
+before reading it as a failure.
+
 ### BeeGFS (`bin/eval-under-beegfs`)
 
 A containerised cluster (`fixtures/beegfs/docker-compose-v{7,8}.yml`) plus
@@ -174,6 +285,110 @@ available beside it: `BeeGFS * / git testsuite` **passes** on both
 versions. Whatever BeeGFS does differently, it is not breaking git's
 index, refs, or object plumbing -- so the cause sits in what git-annex
 layers on top, or in the syscalls the pjdfstest column is flagging.
+
+### `sshfs (loopback) / git-annex test`
+
+Red by design, and the reason this backend is in the matrix. SFTP's
+`ATTRS` carries no inode number and no link count, so sshfs synthesises
+`st_ino` per path and reports `nlink=1`. `git annex add` hardlinks
+content into `.git/annex/objects` and then verifies the link; the
+verification cannot observe a link that the protocol does not express, so
+the add fails with `failed to link to annex`. `hardlink=yes` with
+`hardlink-same-inode=no` in `fs-capabilities.sh` is the same finding in
+ten seconds rather than twenty minutes.
+
+Not locked-vs-unlocked and not adjusted-vs-plain: what matters is who
+does the ingest. `git add` through the annex filter writes a pointer and
+succeeds, which is why git-annex's own `Repo Tests v10 unlocked` group is
+green while `annex.addunlocked=true` in a plain v10 repo fails.
+
+`-o disable_hardlink` fixes it, counter-intuitively: sshfs then fails
+`link()` with `EPERM` instead of pretending, git-annex falls back to
+copying, and the add succeeds. Measured on a loopback mount here:
+
+| | sshfs default | sshfs `-o disable_hardlink` | ext4 |
+| --- | --- | --- | --- |
+| `git annex add` (locked) | ok | ok | ok |
+| `git annex add`, `annex.addunlocked=true` | **failed to link to annex** | ok | ok |
+| `git clone <local path>` | **fatal: hardlink different from source** | ok | ok |
+
+Both rows marked failing here are red in CI as well, on the
+`sshfs (loopback)` matrix cells, which is what those cells are for.
+
+So a filesystem that advertises hardlinks it cannot express is worse than
+one that admits it has none: every caller here has a copy fallback, and
+only the honest failure reaches it. Worth suggesting to a reporter as a
+mount option before anything else.
+
+### `sshfs (loopback) / git testsuite`
+
+Red, and not for the reason first assumed: git's suite *does* hardlink
+into an object store. `git clone <local path>` hardlinks each object and
+then sanity-checks the result, comparing `st_mode`, `st_ino`, `st_dev`,
+`st_size`, `st_uid` and `st_gid` against the source
+(`builtin/clone.c`). sshfs synthesises `st_ino` per path, so the
+comparison fails and the clone dies:
+
+```
+$ git clone a b
+fatal: hardlink different from source at 'b/.git/objects/a1/dffc7a...'
+```
+
+**Plain `git clone` of a local path does not work on sshfs at all.** That
+is a broader statement than the git-annex one above, and the same
+mechanism. `git clone --no-hardlinks` and `git clone file://...` both
+work, as does `-o disable_hardlink` per the table above.
+
+Two established causes account for most of it:
+
+- **local clone hardlink verification** -- `t1507-rev-parse-upstream`
+  (20), `t1013-read-tree-submodule` (58), `t0035-safe-bare-repository`
+  (2). Each does a local clone or adds a submodule (which clones) in
+  setup, so one failed setup cascades through the script.
+- **no unix sockets** -- `t0301-credential-cache` (37), which reports
+  `fatal: unable to bind to '.../credential/socket': Operation not
+  permitted`, and `t0052-simple-ipc` (9/9), whose server never comes up.
+  `unix-socket=no` in the capability profile predicts both.
+
+Measured against an ext4 control, whole suite (174 scripts, 10366
+assertions): 166 failed assertions in 24 scripts locally, 179 in the CI
+run of the same commit. Treat the count as "of order 170", not exact --
+it moves by ~10 between runs of the same tree, which is itself worth
+knowing before reading a delta as a regression. The two causes above
+dominate it either way. The remainder are small and **not** yet explained -- `t0003-attributes` (6),
+`t1091-sparse-checkout-builtin` (8), `t0610-reftable-basics` (3),
+`t0021-conversion` (3), and ten scripts with one each. Do not assume
+they share a cause with the two above.
+
+Reproduce a single script rather than the suite:
+
+```bash
+sudo bin/eval-under sshfs --set-home -- \
+  env EVAL_UNDER_GIT_TESTS=t1507-rev-parse-upstream.sh bin/ci/target-git.sh
+```
+
+Two things this cell taught the harness, recorded so they are not
+re-learned:
+
+- `not ok N ... # TODO known breakage` is git's `test_expect_failure`, a
+  TAP TODO directive that prove counts as an expected result. Counting
+  those as failures had this cell reporting 351 failed assertions where
+  prove saw 166, with `t1517-outside-repo` (104) and
+  `t0450-txt-doc-vs-help` (54) -- both of which prove reports as **ok**
+  -- looking like the worst offenders. `bin/ci/dump-failure-logs.sh` now
+  excludes the directive.
+- A script that fails only in the full run is not automatically a
+  concurrency effect. Both scripts above pass in isolation *and* in the
+  full suite; it was the counting that differed, not the filesystem.
+
+### `sshfs (loopback) / stress-ng`, `sshfs (loopback) / pjdfstest` -- no cells
+
+Not red, absent. A FUSE mount belongs to whoever mounted it and there is
+no `--no-root-squash` equivalent, so these suites could only report on
+privilege, not on the filesystem. `no-root: true` on the backend row in
+`.github/matrix.yaml` drops the pair everywhere (workflow, README grid,
+badges, report page), and `bin/ci/run-under.sh` refuses it outright with
+exit 2 if asked directly.
 
 ### `Loop ext4 / git-annex test`
 

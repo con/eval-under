@@ -65,6 +65,14 @@ out.append("declare -A _EU_NEEDS_ROOT=(%s)" % " ".join(
 out.append("declare -A _EU_NEEDS_GA=(%s)" % " ".join(
     "[%s]=%s" % (q(t["name"]), q(int(bool(t["needs-git-annex"])))) for t in targets))
 
+def bslug(b):
+    return b["backend"] if b["version"] == "n/a" else "%s-%s" % (b["backend"], b["version"])
+
+# Optional per-backend flag, defaulting to false, so existing rows need
+# no edit.
+out.append("declare -A _EU_BACKEND_NO_ROOT=(%s)" % " ".join(
+    "[%s]=%s" % (q(bslug(b)), q(int(bool(b.get("no-root", False))))) for b in backends))
+
 # Env overrides win, so these are defaults only.
 out.append(": \"${EVAL_UNDER_REPO_SLUG:=%s}\"" % q(d["repo-slug"]))
 out.append(": \"${EVAL_UNDER_SRC_DIR:=%s}\"" % q(d["src-dir"]))
@@ -131,3 +139,23 @@ target_loop_size_mb() { echo "${_EU_LOOP_MB[$1]:-100}"; }
 # two. run-under.sh passes --no-root-squash for these.
 target_needs_root()      { [ "${_EU_NEEDS_ROOT[$1]:-0}" = 1 ]; }
 target_needs_git_annex() { [ "${_EU_NEEDS_GA[$1]:-0}" = 1 ]; }
+
+# Can this backend hand the wrapped suite privilege at all? Takes a
+# backend *slug* (as backend_slug prints it), not a bare backend name.
+backend_no_root() { [ "${_EU_BACKEND_NO_ROOT[$1]:-0}" = 1 ]; }
+
+# Is <backend> <version> x <target> a cell the matrix actually defines?
+# The grid is deliberately not fully populated: a backend that cannot run
+# as root has no cell for a target that needs root, because such a cell
+# would measure privilege rather than the filesystem. Every consumer of
+# the matrix asks this rather than assuming backends x targets, so the
+# workflow, the README grid, the badges and the report page agree on
+# which cells exist.
+cell_enabled() {
+    local backend="$1" version="$2" target="$3"
+    if backend_no_root "$(backend_slug "$backend" "$version")" \
+       && target_needs_root "$target"; then
+        return 1
+    fi
+    return 0
+}

@@ -57,6 +57,13 @@ def matrix_cells(matrix_file: Path) -> dict[str, dict]:
     for b in d["backends"]:
         bslug = b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}"
         for t in d["targets"]:
+            # Not every backend x target pair is a cell: a backend that
+            # cannot run as root (no-root in matrix.yaml) has none for a
+            # needs-root target, since the cell would measure privilege
+            # rather than the filesystem. Skipping it here keeps it out of
+            # status.json, so it publishes no permanently-unknown badge.
+            if b.get("no-root") and t["needs-root"]:
+                continue
             slug = f"{bslug}-{t['name']}"
             cells[slug] = {
                 "backend": b["backend"],

@@ -28,6 +28,7 @@ itself is both backend- and suite-agnostic: new filesystems drop in as
 | BeeGFS 7.4.6 | [![BeeGFS 7.4.6 / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-7.4.6-git-annex.svg)](https://con.github.io/eval-under/#beegfs-7.4.6-git-annex) | [![BeeGFS 7.4.6 / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-7.4.6-git.svg)](https://con.github.io/eval-under/#beegfs-7.4.6-git) | [![BeeGFS 7.4.6 / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-7.4.6-stress-ng.svg)](https://con.github.io/eval-under/#beegfs-7.4.6-stress-ng) | [![BeeGFS 7.4.6 / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-7.4.6-pjdfstest.svg)](https://con.github.io/eval-under/#beegfs-7.4.6-pjdfstest) |
 | BeeGFS 8.1.0 | [![BeeGFS 8.1.0 / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-8.1.0-git-annex.svg)](https://con.github.io/eval-under/#beegfs-8.1.0-git-annex) | [![BeeGFS 8.1.0 / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-8.1.0-git.svg)](https://con.github.io/eval-under/#beegfs-8.1.0-git) | [![BeeGFS 8.1.0 / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-8.1.0-stress-ng.svg)](https://con.github.io/eval-under/#beegfs-8.1.0-stress-ng) | [![BeeGFS 8.1.0 / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/beegfs-8.1.0-pjdfstest.svg)](https://con.github.io/eval-under/#beegfs-8.1.0-pjdfstest) |
 | NFS (localhost) | [![NFS (localhost) / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-git-annex.svg)](https://con.github.io/eval-under/#nfs-git-annex) | [![NFS (localhost) / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-git.svg)](https://con.github.io/eval-under/#nfs-git) | [![NFS (localhost) / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-stress-ng.svg)](https://con.github.io/eval-under/#nfs-stress-ng) | [![NFS (localhost) / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/nfs-pjdfstest.svg)](https://con.github.io/eval-under/#nfs-pjdfstest) |
+| sshfs (loopback) | [![sshfs (loopback) / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/sshfs-git-annex.svg)](https://con.github.io/eval-under/#sshfs-git-annex) | [![sshfs (loopback) / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/sshfs-git.svg)](https://con.github.io/eval-under/#sshfs-git) | n/a | n/a |
 | Loop vfat | [![Loop vfat / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-git-annex.svg)](https://con.github.io/eval-under/#loop-vfat-git-annex) | [![Loop vfat / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-git.svg)](https://con.github.io/eval-under/#loop-vfat-git) | [![Loop vfat / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-stress-ng.svg)](https://con.github.io/eval-under/#loop-vfat-stress-ng) | [![Loop vfat / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-vfat-pjdfstest.svg)](https://con.github.io/eval-under/#loop-vfat-pjdfstest) |
 | Loop ext4 | [![Loop ext4 / git-annex test](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-git-annex.svg)](https://con.github.io/eval-under/#loop-ext4-git-annex) | [![Loop ext4 / git testsuite](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-git.svg)](https://con.github.io/eval-under/#loop-ext4-git) | [![Loop ext4 / stress-ng](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-stress-ng.svg)](https://con.github.io/eval-under/#loop-ext4-stress-ng) | [![Loop ext4 / pjdfstest](https://raw.githubusercontent.com/con/eval-under/gh-pages/badges/loop-ext4-pjdfstest.svg)](https://con.github.io/eval-under/#loop-ext4-pjdfstest) |
 <!-- END CI MATRIX -->
@@ -145,6 +146,14 @@ sudo bin/eval-under loop --fs xfs --size 200 --set-home -- \
 # the fsync-heavy slow path)
 sudo bin/eval-under nfs --set-home -- bash -c 'cd "$HOME" && git annex test'
 
+# Under sshfs, with the attribute cache off
+sudo bin/eval-under sshfs --no-cache --set-home -- \
+  bash -c 'cd "$HOME" && git annex test'
+
+# ...or against the reporter's own server, with their mount options
+sudo bin/eval-under sshfs --host store.example.org --remote-dir /data/scratch \
+  --workaround rename --set-home -- git annex fsck
+
 # Skip teardown to poke around after a failure
 sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 
@@ -188,6 +197,7 @@ into `bin/eval-under`, bumped with each release tag.
 | `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                                   |
 | `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
 | `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
+| `bin/eval-under-sshfs`                   | sshfs backend (throwaway loopback sshd, or a remote you name)                       |
 | `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |

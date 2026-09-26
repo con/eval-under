@@ -46,6 +46,8 @@ KNOWN_RED = {
     "beegfs-8.1.0-git-annex": "the bug this repo exists to characterise",
     "nfs-pjdfstest": "NFS chown/setuid divergence (106 of 1280 assertions)",
     "loop-ext4-git-annex": "pre-existing, predates this harness",
+    "sshfs-git-annex": "sshfs hardlinks are invisible: link() succeeds, st_ino differs",
+    "sshfs-git": "same cause: local git clone verifies its hardlinks by st_ino",
 }
 
 STATE = {
@@ -119,8 +121,8 @@ def main() -> int:
         import yaml
         m = yaml.safe_load(fh)
     backends = [(b["backend"] if b["version"] == "n/a" else f"{b['backend']}-{b['version']}",
-                 b["label"]) for b in m["backends"]]
-    targets = [(t["name"], t["label"]) for t in m["targets"]]
+                 b["label"], bool(b.get("no-root"))) for b in m["backends"]]
+    targets = [(t["name"], t["label"], bool(t["needs-root"])) for t in m["targets"]]
 
     npass = sum(1 for c in cells.values() if c.get("conclusion") == "success")
     total = len(cells)
@@ -129,9 +131,15 @@ def main() -> int:
                  args.outdir / "badges" / "overall.svg")
 
     rows = []
-    for bslug, blabel in backends:
+    for bslug, blabel, bno_root in backends:
         tds = [f"<th scope=row>{html.escape(blabel)}</th>"]
-        for tname, tlabel in targets:
+        for tname, tlabel, tneeds_root in targets:
+            # Not a cell -- see no-root in matrix.yaml. Rendered as an
+            # explicit gap rather than an "unknown" badge, which would
+            # read as "we have not measured this yet".
+            if bno_root and tneeds_root:
+                tds.append('<td class=cell><span class=meta>n/a</span></td>')
+                continue
             slug = f"{bslug}-{tname}"
             c = cells.get(slug, {"conclusion": "unknown"})
             concl = c.get("conclusion", "unknown")
@@ -155,7 +163,7 @@ def main() -> int:
             tds.append(f'<td class=cell id="{slug}">{body}{meta}{why}</td>')
         rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    head = "".join(f"<th>{html.escape(l)}</th>" for _, l in targets)
+    head = "".join(f"<th>{html.escape(l)}</th>" for _, l, _ in targets)
     repo = "con/eval-under"
     doc = f"""<!doctype html>
 <html lang=en>
