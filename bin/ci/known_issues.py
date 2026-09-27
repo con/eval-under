@@ -29,11 +29,14 @@ GOTCHAS_END = "<!-- END KNOWN ISSUES -->"
 
 OK_STATES = ("passing", "failing-known")     # states whose job succeeds
 TIMEOUT_RCS = (124, 137)                     # timeout(1), and its KILL
-MAX_ANNOTATIONS = 10    # ::error lines per cell
+MAX_ANNOTATIONS = 10    # ids per annotation kind, per cell
 
 
 # --------------------------------------------------------------------------
 # the issues
+
+# Rows collect-results.py adds for a TAP script that dies.
+PSEUDO = re.compile(r"#(?:plan|exit|bailout)$")
 
 # `<file>#107-108,118-120`: prove's "Failed tests:" syntax, pasteable as is.
 RANGES = re.compile(r"^(?P<pre>.*#)(?P<r>\d+(?:-\d+)?(?:\s*,\s*\d+(?:-\d+)?)+|\d+-\d+)$")
@@ -80,6 +83,9 @@ class Issue:
                 and any(fnmatchcase(bslug, p) for p in self.backends))
 
     def matches(self, tid: str) -> bool:
+        if PSEUDO.search(tid):
+            # A script dying is never covered by a glob over its tests.
+            return self.coarse or tid in self.patterns
         return any(fnmatchcase(tid, p) for p in self.patterns)
 
 
@@ -111,13 +117,18 @@ def validate(raw: dict, m: dict) -> list[str]:
     fields = {f for f, d in Issue.__dataclass_fields__.items() if d.init}
     seen = set()
     for n, issue in enumerate(raw.get("issues") or []):
+        if not isinstance(issue, dict):
+            errs.append(f"issues[{n}]: must be a mapping")
+            continue
         iid = issue.get("id")
-        where = f"issue {iid}" if iid else f"issues[{n}]"
-        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", str(iid)):
+        if isinstance(iid, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]*", iid):
+            where = f"issue {iid}"
+            if iid in seen:
+                errs.append(f"{where}: duplicate id")
+            seen.add(iid)
+        else:
+            where = f"issues[{n}]"
             errs.append(f"{where}: id must be lowercase [a-z0-9-]")
-        if iid in seen:
-            errs.append(f"{where}: duplicate id")
-        seen.add(iid)
         errs += [f"{where}: unknown field {k!r}" for k in sorted(set(issue) - fields)]
         if not isinstance(issue.get("title"), str) or not issue["title"]:
             errs.append(f"{where}: title is required")
@@ -197,7 +208,7 @@ def classify(issues: list[Issue], bslug: str, target: str,
     if rc is None:
         complete, reason = False, "the suite never ran (no suite.rc)"
     elif rc in TIMEOUT_RCS:
-        complete, reason = False, f"the suite timed out (exit {rc})"
+        complete, reason = False, f"the suite timed out or was killed (exit {rc})"
     elif complete and (rc != 0) != (counts["fail"] > 0):
         # What catches a parser that silently drops failures.
         complete = False
@@ -307,17 +318,26 @@ def cmd_check(a) -> int:
 # --------------------------------------------------------------------------
 # GOTCHAS.md
 
-def md_link(link: str) -> str:
+def section_titles(text: str) -> dict[str, str]:
+    """GitHub's heading anchor -> heading text."""
+    out = {}
+    for m in re.finditer(r"^#+ (.+)$", text, re.MULTILINE):
+        title = m.group(1).strip()
+        out[re.sub(r"[^\w\- ]", "", title.lower()).replace(" ", "-")] = title
+    return out
+
+
+def md_link(link: str, sections: dict[str, str]) -> str:
     if "://" in link:
         return f"<{link}>"
-    link = link.removeprefix("GOTCHAS.md")     # same-file anchors
-    return f"[{link}]({link})"
+    anchor = link.removeprefix("GOTCHAS.md#")
+    return f"[{sections.get(anchor, link)}](#{anchor})"
 
 
-def render_gotchas(raw: dict, issues: list[Issue], m: dict) -> str:
+def render_gotchas(raw: dict, issues: list[Issue], m: dict, sections: dict[str, str]) -> str:
     cells = matrix_cells(m)
     out = [GOTCHAS_BEGIN, "", "| Tag | Meaning |", "| --- | --- |"]
-    out += [f"| `{t}` | {desc} |" for t, desc in raw["tags"].items()]
+    out += [f"| `{t}` | {desc} |" for t, desc in (raw.get("tags") or {}).items()]
     for i in issues:
         mine = [s for s, c in cells.items() if i.applies(c["backend_slug"], c["target"])]
         meta = ["**Cells:** " + ", ".join(f"`{s}`" for s in mine)]
@@ -329,7 +349,7 @@ def render_gotchas(raw: dict, issues: list[Issue], m: dict) -> str:
         if i.notes:
             paras.append(i.notes.rstrip())
         if i.links:
-            paras.append("See: " + ", ".join(md_link(link) for link in i.links))
+            paras.append("See: " + ", ".join(md_link(link, sections) for link in i.links))
         out += ["", f'<a id="{i.id}"></a>', f"### `{i.id}`: {i.title}", "", "\n\n".join(paras)]
     out += ["", GOTCHAS_END]
     return "\n".join(out)
@@ -342,7 +362,14 @@ def gotchas_text() -> tuple[str, str]:
     b, e = text.find(GOTCHAS_BEGIN), text.find(GOTCHAS_END)
     if b < 0 or e < b:
         sys.exit(f"E: {GOTCHAS_FILE.name}: generated-section markers not found")
-    block = render_gotchas(raw, issues, load_matrix())
+    # Only the hand-written sections: the generated one is what links point from.
+    sections = section_titles(text[:b] + text[e:])
+    dead = [f"issue {i.id}: no section for {link!r}" for i in issues for link in i.links
+            if link.startswith("GOTCHAS.md#")
+            and link.removeprefix("GOTCHAS.md#") not in sections]
+    if dead:
+        sys.exit("\n".join(f"E: {ISSUES_FILE.name}: {d}" for d in dead))
+    block = render_gotchas(raw, issues, load_matrix(), sections)
     return text, text[:b] + block + text[e + len(GOTCHAS_END):]
 
 

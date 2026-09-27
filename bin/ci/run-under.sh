@@ -72,7 +72,7 @@ echo "I: $(target_label "$TARGET") under $BACKEND/$VERSION (timeout ${TIMEOUT}s)
 
 out="$(cell_output_dir "$BACKEND" "$VERSION" "$TARGET")"
 mkdir -p "$out"
-rm -f "$out/suite.rc" "$out/results.tsv" "$out/verdict.json"
+rm -f "$out/suite.rc" "$out/verdict.json"
 # We run under sudo, but the checker that adds to $out runs as the
 # invoking user. No recursive chown: $out may be an override
 # (EVAL_UNDER_OUTPUT_DIR survives `sudo -E`).

@@ -61,6 +61,18 @@ class TestGit(unittest.TestCase):
         self.assertEqual(h["complete"], "no")
         self.assertIn("duplicate TAP test numbers", h["reason"])
 
+    def test_bailout_is_a_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            res = Path(tmp) / "t/test-results"
+            res.mkdir(parents=True)
+            (res / "t0000-x.tap").write_text("ok 1\nBail out! no mount\n")
+            (res / "t0000-x.exit").write_text("255\n")
+            log = Path(tmp) / "suite.log"
+            log.write_text("Bailout called.  Further testing stopped:  no mount\n")
+            h, r = collect("git", log, "--git-t", str(Path(tmp) / "t"))
+        self.assertEqual(h["complete"], "yes", h.get("reason"))
+        self.assertEqual(r["t0000-x.sh#bailout"], "fail")
+
     def test_no_git_t_is_incomplete(self):
         h, _ = collect("git", DATA / "git/suite.log")
         self.assertEqual(h["complete"], "no")

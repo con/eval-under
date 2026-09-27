@@ -19,35 +19,31 @@
 # and what a browser shows on hover.
 #
 # usage:
-#   bin/ci/render-badge.sh <status> [title] [text]
+#   bin/ci/render-badge.sh <status> <text> [title]
 #
 #   status = a job conclusion (success | failure | cancelled | skipped) or
 #            a cell state from bin/ci/known_issues.py; picks the colour
+#   text   = badge text
 #   title  = tooltip / accessible name (default: the text)
-#   text   = badge text (default: a word for <status>)
 #
 # e.g.
-#   bin/ci/render-badge.sh success "BeeGFS 7.4.6 / git testsuite"
+#   bin/ci/render-badge.sh success passing "BeeGFS 7.4.6 / git testsuite"
 
 set -euo pipefail
 
 STATUS="${1:?status required}"
-TITLE="${2:-}"
+text="${2:?text required}"
+TITLE="${3:-$text}"
 
 # Colours match the shields.io "flat" palette so these sit comfortably
 # next to any conventional badge elsewhere in the README.
 case "$STATUS" in
-    success|passing) text="passing";   color="#4c1" ;;
-    failure|failing-known) text="failing"; color="#e05d44" ;;
-    failing-new) text="failing";       color="#b60205" ;;
-    incomplete)  text="incomplete";    color="#fe7d37" ;;
-    cancelled) text="cancelled"; color="#9f9f9f" ;;
-    skipped)   text="skipped";   color="#9f9f9f" ;;
-    *)         text="unknown";   color="#9f9f9f" ;;
+    success|passing)       color="#4c1" ;;
+    failure|failing-known) color="#e05d44" ;;
+    failing-new)           color="#b60205" ;;
+    incomplete)            color="#fe7d37" ;;
+    *)                     color="#9f9f9f" ;;
 esac
-
-[ -z "${3:-}" ] || text="$3"
-[ -n "$TITLE" ] || TITLE="$text"
 
 xml_escape() {
     printf '%s' "$1" \

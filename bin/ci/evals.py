@@ -72,7 +72,8 @@ def write_results(path: Path, rows: list[Row], reason: str = "") -> None:
 
 
 def read_results(path: Path) -> tuple[dict[str, str], list[tuple[str, str]]]:
-    """(header, [(id, outcome)])."""
+    """(header, [(id, outcome)]); a missing file or a bad outcome reads as
+    incomplete."""
     if not path.is_file():
         return {"complete": "no", "reason": f"no {path.name} (results never collected)"}, []
     header: dict[str, str] = {}

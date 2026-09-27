@@ -25,8 +25,8 @@ TAP_LINE = re.compile(
     r"(?:\s*#\s*(?P<dir>TODO|SKIP)\b\s*(?P<why>.*))?$", re.IGNORECASE)
 TAP_PLAN = re.compile(r"^1\.\.(?P<n>\d+)(?:\s+#\s*(?P<skip>SKIP.*))?$", re.IGNORECASE)
 TAP_BAIL = re.compile(r"^Bail out!\s*(?P<why>.*)$")
-# What prove prints instead of passing the TAP "Bail out!" line through;
-# not necessarily right after the file that bailed.
+# What prove prints, at the end rather than inline, in place of the TAP
+# "Bail out!" line.
 PROVE_BAIL = re.compile(r"^Bailout called\.\s+Further testing stopped:\s*(?P<why>.*)$")
 PROVE_TOTALS = re.compile(r"^Files=(?P<files>\d+), Tests=(?P<tests>\d+),")
 
@@ -113,6 +113,8 @@ def check_no_dupes(files: list[TapFile]) -> None:
 
 
 def check_tap_totals(files: list[TapFile], lines: list[str]) -> None:
+    if any(f.bailout is not None for f in files):
+        return      # prove prints no totals then; the #bailout row is the verdict
     nfiles, ntests = prove_totals(lines)
     got = sum(len(f.points) for f in files)
     if nfiles != len(files) or ntests != got:
@@ -137,7 +139,8 @@ def collect_git(lines: list[str], git_t: Path | None) -> list[Row]:
         for ln in clean_lines(tap):
             tf.feed(ln)
         ex = tap.with_suffix(".exit")
-        code = int(ex.read_text().strip() or 0) if ex.is_file() else None
+        text = ex.read_text().strip() if ex.is_file() else ""
+        code = int(text) if text else None
         files.append(tf)
         rows += tf.rows(code)
     if not files:
@@ -185,9 +188,7 @@ def collect_pjdfstest(lines: list[str]) -> list[Row]:
     if bail and last is not None:
         # prove stops right after the file that bailed: the last one started.
         last.bailout = bail.group("why").strip() or "(no reason given)"
-    # After a bail-out prove may print no totals; #bailout carries the verdict.
-    if not any(f.bailout is not None for f in files.values()):
-        check_tap_totals(list(files.values()), lines)
+    check_tap_totals(list(files.values()), lines)
     rows = []
     for name, tf in files.items():
         rows += tf.rows(exit_codes.get(name))

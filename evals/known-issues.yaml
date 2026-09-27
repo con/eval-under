@@ -19,10 +19,12 @@
 #                          (as `git annex test --list-tests` prints them)
 #             A TAP script also reports <file>#plan, <file>#exit or
 #             <file>#bailout when it dies, and a bare <file> when it
-#             skips everything.
+#             skips everything. Only a literal id or "*" matches those
+#             three, so `<file>#*` does not cover the script dying.
 #   tags      from the vocabulary below
 #   links     upstream reports, GOTCHAS.md sections, ...
-#   notes     Markdown, shown in GOTCHAS.md and on the status page
+#   notes     Markdown for GOTCHAS.md; the status page renders only
+#             `code` spans
 #
 # After editing: bin/ci/known_issues.py gotchas
 
@@ -57,7 +59,7 @@ issues:
     links: ["GOTCHAS.md#loop-vfat-is-not-a-posix-filesystem"]
     notes: |
       Presumably vfat's 2-second mtime granularity (and lack of atime)
-      tripping `--verify`; not yet confirmed from the stressor's output.
+      tripping `--verify`.
 
   - id: vfat-git-posixperm
     title: git sets POSIXPERM from uname, never probes the work tree
@@ -80,8 +82,7 @@ issues:
     links: ["GOTCHAS.md#loop-vfat-is-not-a-posix-filesystem"]
     notes: |
       Both create a Unix-domain socket under the trash directory, which
-      vfat cannot hold. Hypothesis from the test names; not yet confirmed
-      from the .out files.
+      vfat cannot hold.
 
   - id: vfat-git-untriaged
     title: remaining git testsuite failures on vfat
@@ -114,8 +115,7 @@ issues:
     tags: [fs-divergence]
     links: ["GOTCHAS.md#nfs-bineval-under-nfs"]
     notes: |
-      106 of chown/00.t's 1280 assertions. The cell runs `--no-root-squash`;
-      under the default `root_squash` pjdfstest refuses to start at all.
+      106 of chown/00.t's 1280 assertions.
 
   - id: nfs-pjdfstest-untriaged
     title: remaining pjdfstest failures on NFS

@@ -41,7 +41,7 @@ fi
 [ "${#scripts[@]}" -gt 0 ] || { echo "no shell scripts found" >&2; exit 1; }
 SHELLCHECK="${SHELLCHECK:-shellcheck}"
 command -v "$SHELLCHECK" >/dev/null || {
-    echo "shellcheck not found -- apt-get install shellcheck" >&2
+    echo "shellcheck not found; see bin/ci/install-check-deps.sh" >&2
     exit 1
 }
 

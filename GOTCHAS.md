@@ -24,7 +24,7 @@ A sparse backing image is `dd`'d, `mkfs.<fs>`'d, and loop-mounted.
 | Knob | Value | Why |
 | --- | --- | --- |
 | `mkfs` options | none -- distro defaults | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. |
-| Image size | per target, `target_loop_size_mb()` in `bin/ci/matrix.sh` | `git annex test` needs room for many small objects; the other three do not. |
+| Image size | per target, `loop-size-mb` in `evals/matrix.yaml` | `git annex test` needs room for many small objects; the other three do not. |
 | Mount (vfat, msdos, exfat, ntfs) | `-o uid=<invoker>,gid=<invoker>` | These filesystems store no ownership. Without `uid=`, everything belongs to root and an unprivileged wrapped command cannot write. |
 | Mount (everything else) | plain `mount`, then `chown <invoker>` on the mountpoint | ext4/xfs/btrfs carry real ownership; setting it once on the root is enough. |
 
@@ -112,7 +112,7 @@ entry in `evals/known-issues.yaml`; what that means for CI is in
 About half of pjdfstest's files fail, and the run ends in a bail-out
 rather than a summary.
 
-See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem)
+See: [Loop vfat is not a POSIX filesystem](#loop-vfat-is-not-a-posix-filesystem)
 
 <a id="vfat-utime"></a>
 ### `vfat-utime`: stress-ng utime verification fails on vfat
@@ -122,9 +122,9 @@ See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem
 **Tests:** `utime`
 
 Presumably vfat's 2-second mtime granularity (and lack of atime)
-tripping `--verify`; not yet confirmed from the stressor's output.
+tripping `--verify`.
 
-See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem)
+See: [Loop vfat is not a POSIX filesystem](#loop-vfat-is-not-a-posix-filesystem)
 
 <a id="vfat-git-posixperm"></a>
 ### `vfat-git-posixperm`: git sets POSIXPERM from uname, never probes the work tree
@@ -133,7 +133,7 @@ See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem
 **Tags:** `test-assumption` \
 **Tests:** `t0001-init.sh#1-5,8,10-13,20-21,28`, `t1301-shared-repo.sh#2-3,5-22`
 
-See: [#loop-vfat--git-testsuite-posixperm](#loop-vfat--git-testsuite-posixperm)
+See: [Loop vfat / git testsuite: POSIXPERM](#loop-vfat--git-testsuite-posixperm)
 
 <a id="vfat-git-no-unix-sockets"></a>
 ### `vfat-git-no-unix-sockets`: git's IPC and credential-cache tests need Unix sockets on the work tree
@@ -143,10 +143,9 @@ See: [#loop-vfat--git-testsuite-posixperm](#loop-vfat--git-testsuite-posixperm)
 **Tests:** `t0052-simple-ipc.sh#1-9`, `t0301-credential-cache.sh#2-3,7-8,10-11,13-23,25-26,28,30,32-33,37-38,40-41,43-50,52`
 
 Both create a Unix-domain socket under the trash directory, which
-vfat cannot hold. Hypothesis from the test names; not yet confirmed
-from the .out files.
+vfat cannot hold.
 
-See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem)
+See: [Loop vfat is not a POSIX filesystem](#loop-vfat-is-not-a-posix-filesystem)
 
 <a id="vfat-git-untriaged"></a>
 ### `vfat-git-untriaged`: remaining git testsuite failures on vfat
@@ -155,7 +154,7 @@ See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem
 **Tags:** `needs-triage` \
 **Tests:** `t0003-attributes.sh#48,54`, `t0008-ignores.sh#391-392`, `t0024-crlf-archive.sh#2`, `t0033-safe-directory.sh#16`, `t0061-run-command.sh#8-9`, `t0600-reffiles-backend.sh#31`, `t0610-reftable-basics.sh#8-25`, `t1060-object-corruption.sh#12`, `t1091-sparse-checkout-builtin.sh#49`, `t1300-config.sh#201,209-210,458,466-467`, `t1700-split-index.sh#23-24,26`
 
-See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem)
+See: [Loop vfat is not a POSIX filesystem](#loop-vfat-is-not-a-posix-filesystem)
 
 <a id="nfs-chown-setid"></a>
 ### `nfs-chown-setid`: NFS does not clear setuid/setgid on chown the way pjdfstest expects
@@ -164,10 +163,9 @@ See: [#loop-vfat-is-not-a-posix-filesystem](#loop-vfat-is-not-a-posix-filesystem
 **Tags:** `fs-divergence` \
 **Tests:** `chown/00.t#107-108,118-120,129-130,137-138,148-150,159-160,167-168,178-180,189-190,197-198,208-210,219-220,227-228,238-240,249-250,257-258,268-270,279-280,287-288,598-599,601,613-615,617-618,634-635,637,649,652,664,668-669,685,688,700-701,703,715-717,719-720,736-737,739,751-752,754,766-768,770-771,787-788,790,802-803,805,817-819,821-822,838-839,841,853-854,856,868-870,872-873,889-890,892`
 
-106 of chown/00.t's 1280 assertions. The cell runs `--no-root-squash`;
-under the default `root_squash` pjdfstest refuses to start at all.
+106 of chown/00.t's 1280 assertions.
 
-See: [#nfs-bineval-under-nfs](#nfs-bineval-under-nfs)
+See: [NFS (`bin/eval-under-nfs`)](#nfs-bineval-under-nfs)
 
 <a id="nfs-pjdfstest-untriaged"></a>
 ### `nfs-pjdfstest-untriaged`: remaining pjdfstest failures on NFS
@@ -176,7 +174,7 @@ See: [#nfs-bineval-under-nfs](#nfs-bineval-under-nfs)
 **Tags:** `fs-divergence`, `needs-triage` \
 **Tests:** `chmod/00.t#117`, `unlink/14.t#4`
 
-See: [#nfs-bineval-under-nfs](#nfs-bineval-under-nfs)
+See: [NFS (`bin/eval-under-nfs`)](#nfs-bineval-under-nfs)
 
 <a id="beegfs-pjdfstest"></a>
 ### `beegfs-pjdfstest`: BeeGFS POSIX conformance gaps (link, mknod, rename, utimensat)
@@ -187,7 +185,7 @@ See: [#nfs-bineval-under-nfs](#nfs-bineval-under-nfs)
 
 Identical assertions fail on 7.4.6 and 8.1.0.
 
-See: [#beegfs-bineval-under-beegfs](#beegfs-bineval-under-beegfs)
+See: [BeeGFS (`bin/eval-under-beegfs`)](#beegfs-bineval-under-beegfs)
 
 <a id="beegfs-annex-export-busy"></a>
 ### `beegfs-annex-export-busy`: git-annex export/import fails on BeeGFS with EBUSY on rename
@@ -196,7 +194,7 @@ See: [#beegfs-bineval-under-beegfs](#beegfs-bineval-under-beegfs)
 **Tags:** `needs-triage` \
 **Tests:** `Tests.Repo Tests v10 *.export and import`, `Tests.Repo Tests v10 *.export and import of subdir`, `Tests.Repo Tests v10 *.git-remote-annex exporttree`
 
-See: <https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/>, [#beegfs--git-annex-test](#beegfs--git-annex-test)
+See: <https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/>, [BeeGFS / git-annex test](#beegfs--git-annex-test)
 
 <a id="loop-annex-diskreserve"></a>
 ### `loop-annex-diskreserve`: git-annex test on a loop image no larger than annex.diskreserve
@@ -205,7 +203,7 @@ See: <https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/>, [#beegf
 **Tags:** `harness`, `needs-triage` \
 **Tests:** all (whole cell, not yet narrowed down)
 
-See: [#loop-git-annex-cells-annexdiskreserve](#loop-git-annex-cells-annexdiskreserve)
+See: [Loop git-annex cells: annex.diskreserve](#loop-git-annex-cells-annexdiskreserve)
 
 <!-- END KNOWN ISSUES -->
 
@@ -308,8 +306,8 @@ breaking git's index, refs, or object plumbing -- so the cause sits in
 what git-annex layers on top, in how our git-annex is built, or in the
 syscalls the pjdfstest column is flagging.
 
-Working hypothesis for the middle one: our git-annex build lacks the
-OsPath support upstream's builds have (see the upstream bug report
+Working hypothesis for the build: our git-annex lacks the OsPath support
+upstream's builds have (see the upstream bug report
 linked from the issue). Unconfirmed until a build with it runs here.
 
 ## Red that is not a finding
@@ -342,22 +340,19 @@ the job log alone.
 
 1. Look at the job's step summary (written by "Check against known
    issues"): how many failures each known issue covered, and any new
-   failure no issue covers, by test id. Annotations on the run flag
-   known issues that did not reproduce (fixed?) or matched nothing
-   (stale pattern?).
+   failure no issue covers, by test id.
 2. Then the suite's own summary block in the log: `prove`'s `Test
    Summary Report` for `git` and `pjdfstest`, the pass/skip/fail tally
    for `stress-ng`, tasty's `N out of M tests failed` for `git-annex`.
 3. Then the `=== ... failures ===` dump printed by
    `bin/ci/dump-failure-logs.sh`, which names the failing assertions and
    their output.
-4. Then the uploaded `logs-<backend>-<version>-<target>` artifact, which
+4. Then the uploaded `logs-<cell>` artifact (e.g. `logs-nfs-git`), which
    has every test's outcome in `results.tsv` besides the full logs.
 
-A cell marked incomplete never counts as known: the suite timed
-out, died before its summary, or printed totals that disagree with what
-`bin/ci/collect-results.py` parsed. Check the mount actually came up,
-then whether the suite's output format changed under the parser.
+An `incomplete` cell ([README](README.md#known-issues)) never counts as
+known. Check the mount actually came up, then whether the suite's output
+format changed under the parser.
 
 ## Not yet covered
 

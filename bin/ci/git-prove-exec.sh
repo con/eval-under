@@ -6,11 +6,13 @@
 #
 # prove --exec hook for git's testsuite (see bin/ci/target-git.sh): runs
 # each test through git's own t/run-test.sh, keeping its TAP -- exactly
-# what prove parses -- in test-results/<script>.tap and its exit status in
-# <script>.exit, for bin/ci/collect-results.py.
+# what prove parses -- in test-results/<script>.tap for
+# bin/ci/collect-results.py. The exit status beside it,
+# test-results/<script>.exit, git writes itself (--verbose-log implies
+# --tee).
 #
-# Why not git's own records: --verbose-log's .out files interleave command
-# output with the TAP, and --write-junit-xml breaks skip-all scripts (as of
+# Why not git's own .out: --verbose-log interleaves command output with
+# the TAP there, and --write-junit-xml breaks skip-all scripts (as of
 # v2.55.0).
 
 set -euo pipefail
@@ -28,11 +30,5 @@ case "${1:-}" in
     *) usage >&2; exit 2 ;;
 esac
 
-base="test-results/$(basename "$1" .sh)"
 mkdir -p test-results
-set +e
-./run-test.sh "$@" | tee "$base.tap"
-rc=${PIPESTATUS[0]}
-set -e
-echo "$rc" > "$base.exit"
-exit "$rc"
+./run-test.sh "$@" | tee "test-results/$(basename "$1" .sh).tap"

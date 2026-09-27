@@ -67,7 +67,7 @@ def verdict_fields(v: dict | None) -> dict:
     }
 
 
-def read_results(results_dir: Path) -> dict[str, tuple[str, dict | None]]:
+def read_cell_artifacts(results_dir: Path) -> dict[str, tuple[str, dict | None]]:
     """slug -> (conclusion, verdict.json or None).
 
     actions/download-artifact gives each artifact its own subdirectory; a
@@ -159,7 +159,7 @@ def main() -> int:
         status = {"cells": {}}
     prior = status.get("cells", {})
 
-    results = read_results(args.results_dir)
+    results = read_cell_artifacts(args.results_dir)
     urls = job_urls(args.jobs)
 
     merged, updated, kept, pruned = {}, 0, 0, 0

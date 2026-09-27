@@ -33,17 +33,24 @@ jobs:
       - name: Install check dependencies
         run: bin/ci/install-check-deps.sh
 
+      # One step per `run-checks.sh -h` check, so the run page names the
+      # one that failed; each runs even if an earlier one failed.
       - name: shellcheck
+        if: ${{ !cancelled() }}
         run: bin/ci/run-checks.sh shellcheck
 
       - name: pyflakes
+        if: ${{ !cancelled() }}
         run: bin/ci/run-checks.sh pyflakes
 
       - name: bats
+        if: ${{ !cancelled() }}
         run: bin/ci/run-checks.sh bats
 
       - name: known issues
+        if: ${{ !cancelled() }}
         run: bin/ci/run-checks.sh known-issues
 
       - name: unit tests
+        if: ${{ !cancelled() }}
         run: bin/ci/run-checks.sh unit

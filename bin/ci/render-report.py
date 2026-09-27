@@ -14,10 +14,6 @@
 # to the exact job log of the run that produced its current state, the
 # same shape as con/git-annex's con.github.io/git-annex-ci-reports.
 #
-# It also carries what a badge cannot: which run, how long ago, which
-# known issues (evals/known-issues.yaml) a red cell's failures fall
-# under, and which failures are new.
-#
 # usage:
 #   bin/ci/render-report.py <status.json> <output-dir>
 
@@ -38,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 
 # Badge text per cell state. A cell without a state (no verdict.json:
 # cancelled, or last run before verdicts existed) falls back to its job
-# conclusion. render-badge.sh maps the same keys to colours.
+# conclusion. render-badge.sh picks the colour from the same keys.
 BADGE_TEXT = {
     "passing": "passing",
     "failing-known": "failing (known)",
@@ -85,10 +81,10 @@ footer { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
 """
 
 
-def render_badge(status: str, title: str, out: Path, text: str = "") -> None:
+def render_badge(status: str, title: str, out: Path, text: str) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
-        [str(HERE / "render-badge.sh"), status, title] + ([text] if text else []),
+        [str(HERE / "render-badge.sh"), status, text, title],
         capture_output=True, text=True, check=True,
     )
     out.write_text(r.stdout)
@@ -173,17 +169,18 @@ def main() -> int:
     m = load_matrix()
     backends = [(backend_slug(b["backend"], b["version"]), b["label"]) for b in m["backends"]]
     targets = [(t["name"], t["label"]) for t in m["targets"]]
-    issues = known_issues.parse(known_issues.load())
+    _, issues = known_issues.load_valid()
 
     def state(c: dict) -> str:
         return c.get("state") or c.get("conclusion", "unknown")
 
-    npass = sum(1 for c in cells.values() if state(c) in ("passing", "success"))
-    # Not "unknown", "cancelled" or "skipped": those say nothing about the filesystem.
-    nnew = sum(1 for c in cells.values()
-               if state(c) in ("failing-new", "incomplete", "failure"))
+    states = [state(c) for c in cells.values()]
+    npass = sum(s in ("passing", "success") for s in states)
+    # Cells that have not reported (unknown, cancelled, skipped) count neither way.
+    nnew = sum(s in ("failing-new", "incomplete", "failure") for s in states)
     total = len(cells)
-    overall = "passing" if npass == total else ("failing-new" if nnew else "failing-known")
+    overall = ("failing-new" if nnew else
+               "failing-known" if "failing-known" in states else "passing")
     render_badge(overall, f"eval-under: {npass}/{total} cells passing, {nnew} unexpected",
                  args.outdir / "badges" / "overall.svg",
                  f"{npass}/{total} passing" + (f", {nnew} unexpected" if nnew else ""))

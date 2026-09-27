@@ -3,11 +3,16 @@
 #
 # Generated with Claude Code
 
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bin" / "ci"))
+BIN = Path(__file__).resolve().parents[1] / "bin" / "ci"
+sys.path.insert(0, str(BIN))
 
 import evals  # noqa: E402
 import known_issues as ki  # noqa: E402
@@ -58,6 +63,7 @@ class TestValidate(unittest.TestCase):
             ({"title": None}, "title is required"),
             ({"id": "X_1"}, "id must be lowercase"),
             ({"expect": "flaky"}, "unknown field 'expect'"),
+            ({"id": ["x"]}, "id must be lowercase"),
             ({"title": "TODO: root cause"}, "placeholder 'TODO: root cause'"),
         ]:
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
@@ -73,6 +79,11 @@ class TestValidate(unittest.TestCase):
         errs = ki.validate({"tags": {"needs-triage": "..."}, "issues": stubs}, MATRIX)
         self.assertEqual(len(errs), 1, errs)
         self.assertIn("placeholder", errs[0])
+
+
+class TestValidateShape(unittest.TestCase):
+    def test_non_mapping_issue(self):
+        self.assertEqual(ki.validate({"issues": ["x"]}, MATRIX), ["issues[0]: must be a mapping"])
 
 
 class TestMatrixCells(unittest.TestCase):
@@ -103,6 +114,17 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(v["state"], "passing")
         self.assertEqual(v["issues"]["x"]["status"], "not-reproduced")
 
+    def test_glob_does_not_cover_a_dying_script(self):
+        glob = issue(tests=["a#*"])
+        for tid in ("a#plan", "a#exit", "a#bailout"):
+            with self.subTest(tid=tid):
+                v = self.classify([(tid, "fail")], issues=[glob])
+                self.assertEqual(v["state"], "failing-new")
+                v = self.classify([(tid, "fail")], issues=[issue(tests=[tid])])
+                self.assertEqual(v["state"], "failing-known")
+                v = self.classify([(tid, "fail")], issues=[issue(tests=["*"])])
+                self.assertEqual(v["state"], "failing-known")
+
     def test_issue_for_other_cell_ignored(self):
         v = self.classify([("a#1", "fail")], issues=[issue(backends=["beegfs-*"])])
         self.assertEqual(v["state"], "failing-new")
@@ -117,6 +139,29 @@ class TestClassify(unittest.TestCase):
             with self.subTest(rc=rc, header=header):
                 v = self.classify(rows, rc=rc, header=header)
                 self.assertEqual((v["state"], v["conclusion"]), ("incomplete", "failure"))
+
+
+class TestCheck(unittest.TestCase):
+    """`check` end to end: suite.rc and results.tsv in, verdict.json and exit status out."""
+
+    def check(self, rc: str, results: str) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            cell = Path(tmp)
+            (cell / "suite.rc").write_text(rc)
+            (cell / "results.tsv").write_text(results)
+            p = subprocess.run([sys.executable, BIN / "known_issues.py", "check",
+                                "nfs", "n/a", "stress-ng", str(cell)],
+                               capture_output=True, text=True, env={**os.environ,
+                                                                    "GITHUB_STEP_SUMMARY": ""})
+            return p.returncode, json.loads((cell / "verdict.json").read_text())
+
+    def test_new_failure_fails_the_job(self):
+        rc, v = self.check("1\n", "# complete: yes\nutime\tfail\nchmod\tpass\n")
+        self.assertEqual((rc, v["state"], v["cell"]), (1, "failing-new", "nfs-stress-ng"))
+
+    def test_passing(self):
+        rc, v = self.check("0\n", "# complete: yes\nchmod\tpass\n")
+        self.assertEqual((rc, v["state"]), (0, "passing"))
 
 
 GOTCHAS_GOLDEN = """\
@@ -135,7 +180,7 @@ GOTCHAS_GOLDEN = """\
 
 Why.
 
-See: <https://example.org/bug>, [#sec](#sec)
+See: <https://example.org/bug>, [A section](#sec)
 
 <a id="y"></a>
 ### `y`: u
@@ -151,8 +196,16 @@ class TestRenderGotchas(unittest.TestCase):
         issues = [issue(tags=["harness"], notes="Why.\n",
                         links=["https://example.org/bug", "GOTCHAS.md#sec"]),
                   issue(id="y", title="u", backends=["beegfs-*"], tests=["*"])]
-        self.assertEqual(ki.render_gotchas({"tags": {"harness": "Ours."}}, issues, MATRIX),
-                         GOTCHAS_GOLDEN)
+        sections = ki.section_titles("# Top\n## A section\n")
+        self.assertEqual(sections, {"top": "Top", "a-section": "A section"})
+        sections["sec"] = "A section"
+        self.assertEqual(ki.render_gotchas({"tags": {"harness": "Ours."}}, issues, MATRIX,
+                                           sections), GOTCHAS_GOLDEN)
+
+    def test_section_anchor_like_github(self):
+        self.assertIn("nfs-bineval-under-nfs", ki.section_titles("### NFS (`bin/eval-under-nfs`)"))
+        self.assertIn("loop-vfat--git-testsuite-posixperm",
+                      ki.section_titles("### Loop vfat / git testsuite: POSIXPERM"))
 
 
 if __name__ == "__main__":

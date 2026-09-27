@@ -65,9 +65,8 @@ a glance.
 ### Known issues
 
 Failures already understood are listed per test in
-[`evals/known-issues.yaml`](evals/known-issues.yaml) -- which cells,
-which tests, a kind-of-cause tag, and links to the evidence -- and each
-cell is judged against it:
+[`evals/known-issues.yaml`](evals/known-issues.yaml), and each cell is
+judged against it:
 
 | Cell outcome | CI job | Badge |
 | --- | --- | --- |
@@ -89,7 +88,7 @@ the cell's `logs-*` artifact.
 
 Budgets below are what the suite itself costs on the loop-ext4 cell; a
 sync-heavy backend (NFS, BeeGFS) runs the same work considerably slower,
-which is why each target carries its own timeout in `bin/ci/matrix.sh`.
+which is why each target carries its own timeout in `evals/matrix.yaml`.
 
 | Target      | What it runs                                          | Prep                                | Budget |
 | ----------- | ----------------------------------------------------- | ----------------------------------- | ------ |
@@ -124,15 +123,9 @@ Why these four, in order of how deep they sit:
   naming each failure.
 - **git-annex** is the original motivation and the top of the stack.
 
-Pinned upstream refs live in `bin/ci/matrix.sh` and are bumped
-deliberately: with a moving testsuite, a newly-red cell is ambiguous --
-did the filesystem regress, or did upstream add a test? git is pinned to
-a release tag. pjdfstest is pinned to a commit rather than its one
-upstream tag (`0.1`, 2016), which no longer compiles: `major()`,
-`minor()` and `makedev()` moved to `<sys/sysmacros.h>` in glibc 2.28 and
-the tree builds with `-Werror`, so those implicit declarations are hard
-errors on any current toolchain. Master builds clean, so we pin a commit
-on it instead of carrying a patch.
+Pinned upstream refs live in `evals/matrix.yaml` (with why each is
+pinned where it is) and are bumped deliberately: with a moving
+testsuite, a newly-red cell is ambiguous.
 
 ## Motivation
 
@@ -222,6 +215,7 @@ into `bin/eval-under`, bumped with each release tag.
 | `bin/ci/target-<target>.sh`              | The suite itself, run inside the mount by `bin/ci/run-under.sh`                    |
 | `evals/known-issues.yaml`                | Known failures per cell and test                                                   |
 | `bin/ci/collect-results.py`              | Turns a suite's output into per-test `results.tsv`                                 |
+| `bin/ci/evals.py`                        | The matrix model and `results.tsv` format shared by the bin/ci Python scripts      |
 | `bin/ci/known_issues.py`                 | Validates the issues, judges a cell against them, regenerates GOTCHAS.md's list    |
 | `bin/ci/gen-readme-matrix.sh`            | Regenerates the README badge grid from `evals/matrix.yaml`                         |
 | `bin/ci/render-badge.sh`                 | Renders one status badge as a self-contained SVG                                   |
@@ -301,9 +295,8 @@ bats tests/
 bats --filter version tests/
 ```
 
-`bin/ci/install-check-deps.sh` installs what they need, all of it
-Debian/Ubuntu packages -- plain bats-core, no `bats-assert` /
-`bats-support` submodules to vendor. The Vagrant VM installs the same.
+`bin/ci/install-check-deps.sh` installs what they need; the Vagrant VM
+runs the same script.
 
 A `--version` caveat worth knowing when a check fails only in CI:
 `git describe` needs tags, and `actions/checkout` fetches none by

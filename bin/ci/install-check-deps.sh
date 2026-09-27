@@ -14,8 +14,6 @@
 #
 # env overrides:
 #   EVAL_UNDER_CHECK_PKGS   packages to install (default: below)
-#
-# Idempotent: already-installed packages are left alone by apt-get.
 
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
