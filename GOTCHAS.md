@@ -312,7 +312,7 @@ See: [Loop git-annex cells: annex.diskreserve](#loop-git-annex-cells-annexdiskre
 
 **Cells:** `sshfs-git` \
 **Tags:** `fs-divergence` \
-**Tests:** `t0001-init.sh#28,37`, `t0003-attributes.sh#24-25,29,32-34,41`, `t0021-conversion.sh#28-30`, `t0033-safe-directory.sh#16`, `t0035-safe-bare-repository.sh#1,13`, `t0410-partial-clone.sh#34,38`, `t0610-reftable-basics.sh#26-28,48`, `t1013-read-tree-submodule.sh#1-8,10-15,18-28,30-48,51-60,65-68`, `t1060-object-corruption.sh#12`, `t1091-sparse-checkout-builtin.sh#31-32,36-38,47,49,77`, `t1350-config-hooks-path.sh#4`, `t1423-ref-backend.sh#36`, `t1460-refs-migrate.sh#9,24`, `t1500-rev-parse.sh#77`, `t1507-rev-parse-upstream.sh#1-7,9-11,13-14,17-18,21,23-27`, `t1600-index.sh#6`
+**Tests:** `t0001-init.sh#37`, `t0003-attributes.sh#24-25,29,32-34`, `t0021-conversion.sh#28-30`, `t0033-safe-directory.sh#16`, `t0035-safe-bare-repository.sh#1,13`, `t0410-partial-clone.sh#34,38`, `t0610-reftable-basics.sh#26-28`, `t1013-read-tree-submodule.sh#1-8,10-15,18-28,30-48,51-60,65-68`, `t1060-object-corruption.sh#12`, `t1091-sparse-checkout-builtin.sh#31-32,36-38,49,77`, `t1350-config-hooks-path.sh#4`, `t1423-ref-backend.sh#36`, `t1460-refs-migrate.sh#9,24`, `t1500-rev-parse.sh#77`, `t1507-rev-parse-upstream.sh#1-7,9-11,13-14,17-18,21,23-27`, `t1600-index.sh#6`
 
 SFTP's `ATTRS` carries no inode number, so sshfs synthesises `st_ino`
 per path. `git clone <local path>` hardlinks each object and then
@@ -328,6 +328,9 @@ were attributed by that message appearing in their own logs.
 `-o disable_hardlink` all work -- with the option, sshfs fails
 `link()` with `EPERM` instead of pretending, and git falls back to
 copying.
+
+Test ids seeded from run 36476334300 (git v2.55.0), 110 assertions
+across 16 scripts.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
@@ -352,13 +355,30 @@ See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
 **Cells:** `sshfs-git` \
 **Tags:** `needs-triage` \
-**Tests:** `t0017-env-helper.sh#4`, `t0027-auto-crlf.sh#2076,2078,2081,2096,2102-2104`, `t0450-txt-doc-vs-help.sh#167,347`, `t1002-read-tree-m-u-2way.sh#17,22`, `t1004-read-tree-m-u-wf.sh#9-10,12,15-17`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#435`, `t1301-shared-repo.sh#17`, `t1410-reflog.sh#21`, `t1430-bad-ref-name.sh#17`, `t1461-refs-list.sh#398`, `t1700-split-index.sh#9`
+**Tests:** `t0003-attributes.sh#48`, `t0061-run-command.sh#6,18`, `t0302-credential-store.sh#57`, `t0450-txt-doc-vs-help.sh#797`, `t1091-sparse-checkout-builtin.sh#48`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#194,285,494`, `t1403-show-ref.sh#9`, `t1450-fsck.sh#36`
 
 Acknowledged, root cause not run down. Deliberately kept apart from
 the two mechanisms above rather than folded into them: neither the
 hardlink message nor a socket refusal appears in these scripts'
 logs. Candidates worth checking first are sshfs's 1-second mtime
-granularity and its lack of `xattr`/`fifo` support.
+granularity, its lack of `xattr`/`fifo` support, and how it reports
+the mode bits `execve()` and `builtin_objectmode` read -- three of
+these are named from their own assertions:
+`t0003#48` "builtin object mode attributes work (dir and regular
+paths)", `t0061#6` "run_command can run a script without a #! line"
+and `t0061#18` "run_command is asked to abort gracefully".
+
+`t0003-attributes.sh#48` is also in `vfat-git-untriaged`, and this
+list's `t0061` and `t1091`/`t1300` assertions sit next to the ones
+recorded there, so some of these are likely one non-POSIX cause
+shared with vfat rather than anything sshfs invented.
+
+Test ids seeded from run 36476334300 (git v2.55.0): 12 assertions,
+of which 11 were not in this file's first draft. That draft was
+derived from a local run in a container that runs as **root**,
+which both flips permission-dependent assertions and renumbers the
+scripts that define tests conditionally -- so its ids named partly
+different assertions. CI's verdict is the one to seed from.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
