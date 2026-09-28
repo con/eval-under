@@ -355,30 +355,41 @@ See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
 **Cells:** `sshfs-git` \
 **Tags:** `needs-triage` \
-**Tests:** `t0003-attributes.sh#48`, `t0061-run-command.sh#6,18`, `t0302-credential-store.sh#57`, `t0450-txt-doc-vs-help.sh#797`, `t1091-sparse-checkout-builtin.sh#48`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#194,285,494`, `t1403-show-ref.sh#9`, `t1450-fsck.sh#36`
+**Tests:** `t0003-attributes.sh#41,48`, `t0017-env-helper.sh#4`, `t0040-parse-options.sh#37`, `t0061-run-command.sh#6,18`, `t0302-credential-store.sh#57`, `t0450-txt-doc-vs-help.sh#131,647,797`, `t0610-reftable-basics.sh#61`, `t1091-sparse-checkout-builtin.sh#21,43,48`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#194,197,237,285,494`, `t1403-show-ref.sh#9`, `t1430-bad-ref-name.sh#26`, `t1450-fsck.sh#36`, `t1461-refs-list.sh#415`, `t1503-rev-parse-verify.sh#4`, `t1700-split-index.sh#10-12,14-15`
 
-Acknowledged, root cause not run down. Deliberately kept apart from
-the two mechanisms above rather than folded into them: neither the
-hardlink message nor a socket refusal appears in these scripts'
-logs. Candidates worth checking first are sshfs's 1-second mtime
-granularity, its lack of `xattr`/`fifo` support, and how it reports
-the mode bits `execve()` and `builtin_objectmode` read -- three of
-these are named from their own assertions:
-`t0003#48` "builtin object mode attributes work (dir and regular
-paths)", `t0061#6` "run_command can run a script without a #! line"
-and `t0061#18` "run_command is asked to abort gracefully".
+**These are flaky, not fixed divergences, and this entry cannot
+gate the cell.** Two mechanisms above are deterministic; this
+residue is not. Measured three ways:
 
-`t0003-attributes.sh#48` is also in `vfat-git-untriaged`, and this
-list's `t0061` and `t1091`/`t1300` assertions sit next to the ones
-recorded there, so some of these are likely one non-POSIX cause
-shared with vfat rather than anything sshfs invented.
+- The same cell on two CI runs of near-identical code
+  (36476334300, then 36485450259) reported 12 and 18 residual
+  failures with **no overlap**: every id the first run flagged
+  passed in the second, and vice versa. The two mechanism entries
+  meanwhile reproduced exactly both times, 110 and 46.
+- Locally, six runs of `t0003 t0017 t0040 t1700` under sshfs:
+  `t0003`'s six hardlink assertions failed in all six runs, while
+  `t0017#4` failed in one and `t0040#37`, `t1700#10-15` and
+  `t0003#41`/`#48` in none -- although CI has flagged each of them.
+- `prove --jobs 1` is no cleaner than `--jobs 4`, and 14 runs of
+  `t0017` alone were all clean, so it takes the fuller suite's
+  concurrent load to show up at all.
 
-Test ids seeded from run 36476334300 (git v2.55.0): 12 assertions,
-of which 11 were not in this file's first draft. That draft was
-derived from a local run in a container that runs as **root**,
-which both flips permission-dependent assertions and renumbers the
-scripts that define tests conditionally -- so its ids named partly
-different assertions. CI's verdict is the one to seed from.
+Some of these tests touch no filesystem semantics whatsoever --
+`t0040#37` "OPT_CALLBACK() and OPT_BIT() work" and `t0017#4`
+"test-tool env-helper --type=ulong" parse arguments and
+environment variables, and `t0450` compares documentation against
+`-h` output. What they do share is capturing output into `>out` /
+`2>err` inside the trash directory on the mount and then grepping
+it, which points at the mount losing or delaying writes under
+concurrent load rather than at any semantic divergence.
+
+So a `script#N` list is the wrong instrument here: each run draws a
+different sample, and pinning one run's sample is what made this
+cell report `failing-new` twice. Untried candidates, in order:
+mounting with `-o attr_timeout=0 -o entry_timeout=0` (and possibly
+`-o max_conns=N` or `-o sync_read`) to see whether the residue
+disappears, which would make the cell deterministic and properly
+xfail-able.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
