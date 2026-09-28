@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import known_issues
-from evals import backend_slug, load_matrix
+from evals import backend_slug, cell_enabled, load_matrix
 
 HERE = Path(__file__).resolve().parent
 
@@ -167,8 +167,8 @@ def main() -> int:
 
     # Matrix order, so the page reads like the README grid.
     m = load_matrix()
-    backends = [(backend_slug(b["backend"], b["version"]), b["label"]) for b in m["backends"]]
-    targets = [(t["name"], t["label"]) for t in m["targets"]]
+    backends = [(backend_slug(b["backend"], b["version"]), b["label"], b) for b in m["backends"]]
+    targets = [(t["name"], t["label"], t) for t in m["targets"]]
     _, issues = known_issues.load_valid()
 
     def state(c: dict) -> str:
@@ -186,9 +186,15 @@ def main() -> int:
                  f"{npass}/{total} passing" + (f", {nnew} unexpected" if nnew else ""))
 
     rows = []
-    for bslug, blabel in backends:
+    for bslug, blabel, bdef in backends:
         tds = [f"<th scope=row>{html.escape(blabel)}</th>"]
-        for tname, tlabel in targets:
+        for tname, tlabel, tdef in targets:
+            # A pair the matrix does not define (see cell_enabled) is an
+            # explicit gap, not an "unknown" badge: nothing was measured
+            # here and nothing ever will be.
+            if not cell_enabled(bdef, tdef):
+                tds.append('<td class=cell><span class=meta>n/a</span></td>')
+                continue
             slug = f"{bslug}-{tname}"
             c = cells.get(slug, {"conclusion": "unknown"})
             st = state(c)
@@ -214,7 +220,7 @@ def main() -> int:
             tds.append(f'<td class=cell id="{slug}">{body}{meta}{cell_notes(c, st, fixed)}</td>')
         rows.append("<tr>" + "".join(tds) + "</tr>")
 
-    head = "".join(f"<th>{html.escape(l)}</th>" for _, l in targets)
+    head = "".join(f"<th>{html.escape(l)}</th>" for _, l, _ in targets)
     repo = m.get("repo-slug", "con/eval-under")
     doc = f"""<!doctype html>
 <html lang=en>

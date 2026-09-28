@@ -31,12 +31,33 @@ def load_matrix(path: Path = MATRIX_FILE) -> dict:
         return yaml.safe_load(fh)
 
 
+def cell_enabled(b: dict, t: dict) -> bool:
+    """Is this backend x target pair a cell the matrix actually defines?
+
+    The grid is deliberately not fully populated. A backend marked
+    `no-root` cannot hand the wrapped suite privilege -- a FUSE mount
+    belongs to whoever mounted it, and there is no --no-root-squash
+    equivalent the way there is for NFS -- so it has no cell for a
+    `needs-root` target: the cell could only report on privilege rather
+    than on the filesystem. bin/ci/run-under.sh refuses the same pair
+    outright. Keep in sync with cell_enabled() in bin/ci/matrix.sh.
+    """
+    return not (b.get("no-root") and t.get("needs-root"))
+
+
 def matrix_cells(m: dict) -> dict[str, dict]:
-    """slug -> cell metadata, in matrix (row, column) order."""
+    """slug -> cell metadata, in matrix (row, column) order.
+
+    Skips the pairs cell_enabled() rules out, so every consumer -- the
+    status file, the badges, the report page -- agrees on which cells
+    exist instead of publishing a permanently-unknown one.
+    """
     cells = {}
     for b in m["backends"]:
         bslug = backend_slug(b["backend"], b["version"])
         for t in m["targets"]:
+            if not cell_enabled(b, t):
+                continue
             cells[f"{bslug}-{t['name']}"] = {
                 "backend": b["backend"],
                 "version": b["version"],
