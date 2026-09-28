@@ -144,19 +144,6 @@ issues:
       Identical assertions fail on 7.4.6 and 8.1.0.
     # Seeded from run 36050917994; split by syscall once each is understood.
 
-  - id: beegfs-annex-export-busy
-    title: git-annex export/import fails on BeeGFS with EBUSY on rename
-    backends: ["beegfs-*"]
-    targets: [git-annex]
-    tests:
-      - "Tests.Repo Tests v10 *.export and import"
-      - "Tests.Repo Tests v10 *.export and import of subdir"
-      - "Tests.Repo Tests v10 *.git-remote-annex exporttree"
-    tags: [needs-triage]
-    links:
-      - https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/
-      - "GOTCHAS.md#beegfs--git-annex-test"
-
   # --------------------------------------------------------- loop images
   - id: loop-annex-diskreserve
     title: git-annex test on a loop image no larger than annex.diskreserve
