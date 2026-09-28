@@ -32,11 +32,17 @@ def load_matrix(path: Path = MATRIX_FILE) -> dict:
 
 
 def matrix_cells(m: dict) -> dict[str, dict]:
-    """slug -> cell metadata, in matrix (row, column) order."""
+    """slug -> cell metadata, in matrix (row, column) order.
+
+    An `on-demand` target is runnable but is not a cell: it has no
+    scheduled run, so it has no status, and including it here would
+    publish a permanently-"unknown" badge and a column that can never
+    fill in.
+    """
     cells = {}
     for b in m["backends"]:
         bslug = backend_slug(b["backend"], b["version"])
-        for t in m["targets"]:
+        for t in (t for t in m["targets"] if not t.get("on-demand")):
             cells[f"{bslug}-{t['name']}"] = {
                 "backend": b["backend"],
                 "version": b["version"],

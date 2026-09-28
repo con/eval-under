@@ -40,7 +40,8 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # stale the way this message just did.
 TARGET="${1:?target required (see targets in evals/matrix.yaml)}"
 target_known "$TARGET" || {
-    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]})" >&2
+    echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]}" \
+         "${EVAL_UNDER_ONDEMAND_TARGETS[*]})" >&2
     exit 1
 }
 
@@ -147,4 +148,7 @@ case "$TARGET" in
     git)       install_git ;;
     stress-ng) install_stress_ng ;;
     pjdfstest) install_pjdfstest ;;
+    # Needs nothing installed: it is bin/ci/fs-capabilities.sh, which is
+    # in this repo and uses only coreutils + sqlite3 if present.
+    capabilities) echo "I: $TARGET needs no runner-side install" ;;
 esac

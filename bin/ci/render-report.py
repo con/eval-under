@@ -168,7 +168,9 @@ def main() -> int:
     # Matrix order, so the page reads like the README grid.
     m = load_matrix()
     backends = [(backend_slug(b["backend"], b["version"]), b["label"]) for b in m["backends"]]
-    targets = [(t["name"], t["label"]) for t in m["targets"]]
+    # An on-demand target is not a column: see matrix_cells() in evals.py.
+    targets = [(t["name"], t["label"]) for t in m["targets"]
+               if not t.get("on-demand")]
     _, issues = known_issues.load_valid()
 
     def state(c: dict) -> str:
