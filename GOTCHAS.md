@@ -187,15 +187,6 @@ Identical assertions fail on 7.4.6 and 8.1.0.
 
 See: [BeeGFS (`bin/eval-under-beegfs`)](#beegfs-bineval-under-beegfs)
 
-<a id="beegfs-annex-export-busy"></a>
-### `beegfs-annex-export-busy`: git-annex export/import fails on BeeGFS with EBUSY on rename
-
-**Cells:** `beegfs-7.4.6-git-annex`, `beegfs-8.1.0-git-annex` \
-**Tags:** `needs-triage` \
-**Tests:** `Tests.Repo Tests v10 *.export and import`, `Tests.Repo Tests v10 *.export and import of subdir`, `Tests.Repo Tests v10 *.git-remote-annex exporttree`
-
-See: <https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/>, [BeeGFS / git-annex test](#beegfs--git-annex-test)
-
 <a id="loop-annex-diskreserve"></a>
 ### `loop-annex-diskreserve`: git-annex test on a loop image no larger than annex.diskreserve
 
@@ -295,20 +286,42 @@ control row cannot catch a git-annex regression.
 
 ### BeeGFS / git-annex test
 
-The original motivating bug, now `beegfs-annex-export-busy`: the same 8
-of the 9 (repo mode x test) combinations of `export and import`, `export
-and import of subdir` and `git-remote-annex exporttree` fail on both
-versions, with `renamePath:rename ... resource busy`.
+The original motivating bug: 8 of the 9 (repo mode x test) combinations
+of `export and import`, `export and import of subdir` and
+`git-remote-annex exporttree` failed on both BeeGFS versions, with
 
-Note the useful negative result beside it: `BeeGFS * / git testsuite`
-**passes** on both versions. Whatever BeeGFS does differently, it is not
-breaking git's index, refs, or object plumbing -- so the cause sits in
-what git-annex layers on top, in how our git-annex is built, or in the
-syscalls the pjdfstest column is flagging.
+    git-annex: renamePath:rename '.git/annex/othertmp/...' to '.git/annex/export.ex/...': resource busy (Device or resource busy)
 
-Working hypothesis for the build: our git-annex lacks the OsPath support
-upstream's builds have (see the upstream bug report
-linked from the issue). Unconfirmed until a build with it runs here.
+(plus the same EBUSY from `mv`), and on 8.1.0 the suite could also hang
+in `Repo Tests v10 unlocked` at `conflict resolution (removed file)`
+until the 2400s timeout.
+
+**Resolved by building git-annex with OsPath**, as the upstream report
+<https://git-annex.branchable.com/bugs/35_failed_tests_on_beegfs/>
+said. Our con/git-annex standalone had silently been built without it:
+the flag is on by default but automatic, and its `file-io >= 0.2.0`
+dependency was missing from the build image (con/git-annex#295 adds it;
+con/git-annex#296 makes that CI require the flag). With the first OsPath
+build (con/git-annex run 36399800528, `10.20260901+git71`), both
+`BeeGFS * / git-annex test` cells pass all 26 test groups -- `pass 838
+fail 0`, no EBUSY, no hang -- where the same 2026-09-28 matrix on the
+non-OsPath git42/git47 builds failed exactly those tests (eval-under runs
+36417303910 vs 36475373813). git47..git71 upstream touches nothing in
+the export or rename paths, so the build flag is the difference.
+
+So the known issue is gone, and a return of those failures is a real
+regression. `bin/ci/install-git-annex-daily.sh` refuses a build lacking
+`OsPath` (`EXPECT_BUILD_FLAGS`), so these cells cannot quietly go back
+to measuring a build without it.
+
+Two things still worth knowing:
+
+- `BeeGFS * / git testsuite` passes on both versions too: BeeGFS does
+  not break git's index, refs or object plumbing.
+- On 7.4.6 one run stalled ~9.5 minutes across several concurrent tests
+  (`storeKey`, `sync`, `add`, ... each ~560-600s) and then passed; the
+  suite took 22m instead of ~6m. Not a failure, but it eats into the
+  2400s budget if it recurs.
 
 ## Red that is not a finding
 
