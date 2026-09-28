@@ -38,12 +38,24 @@ concurrency:
 jobs:
   matrix:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read  # to list con/git-annex runs and their artifacts
     outputs:
       cells: ${{ steps.cells.outputs.matrix }}
+      git-annex-run: ${{ steps.git-annex-build.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
       - id: cells
         run: echo "matrix=$(bin/ci/matrix-json.sh)" >> "$GITHUB_OUTPUT"
+      # Pick the git-annex build once, so every cell of this run tests
+      # the same one. On failure the cells fall back to picking it
+      # themselves (empty run id) rather than all going red.
+      - id: git-annex-build
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bin/ci/pick-git-annex-build.sh
 
   test:
     needs: matrix
@@ -77,6 +89,7 @@ jobs:
         if: matrix.target == 'git-annex'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_ANNEX_RUN_ID: ${{ needs.matrix.outputs.git-annex-run }}
         run: bin/ci/install-git-annex-daily.sh
 
       - name: Configure git identity
