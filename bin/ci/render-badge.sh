@@ -19,30 +19,36 @@
 # and what a browser shows on hover.
 #
 # usage:
-#   bin/ci/render-badge.sh <status> [title]
+#   bin/ci/render-badge.sh <status> <text> [title]
 #
-#   status = success | failure | cancelled | skipped | <anything else>
-#   title  = tooltip / accessible name (default: the status text)
+#   status = a job conclusion (success | failure | cancelled | skipped) or
+#            a cell state from bin/ci/known_issues.py; picks the colour
+#   text   = badge text
+#   title  = tooltip / accessible name (default: the text)
 #
 # e.g.
-#   bin/ci/render-badge.sh success "BeeGFS 7.4.6 / git testsuite"
+#   bin/ci/render-badge.sh success passing "BeeGFS 7.4.6 / git testsuite"
 
 set -euo pipefail
 
 STATUS="${1:?status required}"
-TITLE="${2:-}"
+text="${2:?text required}"
+TITLE="${3:-$text}"
 
 # Colours match the shields.io "flat" palette so these sit comfortably
 # next to any conventional badge elsewhere in the README.
 case "$STATUS" in
-    success)   text="passing";   color="#4c1" ;;
-    failure)   text="failing";   color="#e05d44" ;;
-    cancelled) text="cancelled"; color="#9f9f9f" ;;
-    skipped)   text="skipped";   color="#9f9f9f" ;;
-    *)         text="unknown";   color="#9f9f9f" ;;
+    success|passing)       color="#4c1" ;;
+    failure|failing-known) color="#e05d44" ;;
+    failing-new)           color="#b60205" ;;
+    incomplete)            color="#fe7d37" ;;
+    *)                     color="#9f9f9f" ;;
 esac
 
-[ -n "$TITLE" ] || TITLE="$text"
+xml_escape() {
+    printf '%s' "$1" \
+        | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
 
 # Width: DejaVu Sans at 11px averages just under 7px/char for lowercase
 # ASCII, plus 5px padding either side. Approximate is fine -- the text
@@ -53,8 +59,8 @@ mid=$(( width * 5 ))   # centre, in the 10x-scaled text coordinate space
 
 # XML-escape the title: cell labels are plain ASCII today, but a future
 # backend label with an "&" in it should not emit invalid SVG.
-esc_title=$(printf '%s' "$TITLE" \
-    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g')
+esc_title=$(xml_escape "$TITLE")
+text=$(xml_escape "$text")
 
 cat <<EOF
 <svg xmlns="http://www.w3.org/2000/svg" width="$width" height="20" role="img" aria-label="$esc_title: $text">

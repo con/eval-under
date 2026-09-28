@@ -35,10 +35,8 @@ apt-get install -y --no-install-recommends \
 
 log "eval-under's own checks"
 # What bin/ci/run-checks.sh needs, so the fast layer is runnable in the
-# VM too and not only on the runner. (Comment deliberately not opened
-# with the linter's own name -- that reads as a shellcheck directive.)
-apt-get install -y --no-install-recommends \
-  shellcheck bats
+# VM too and not only on the runner.
+/vagrant/bin/ci/install-check-deps.sh
 
 log "eval-under-nfs / eval-under-loop dependencies"
 # nfs-kernel-server: provides exportfs + mount.nfs (eval-under-nfs).

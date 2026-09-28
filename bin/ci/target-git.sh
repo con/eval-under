@@ -111,6 +111,8 @@ echo "I: trash directories under $root"
 # are what bin/ci/dump-failure-logs.sh reports from and what the job
 # uploads as an artifact.
 #
+# --exec: see bin/ci/git-prove-exec.sh.
+#
 # --root puts the per-test trash directory on the mount; the build and
 # test-results/ stay on the runner disk (bookkeeping, not filesystem
 # exercise).
@@ -122,5 +124,5 @@ echo "I: trash directories under $root"
 exec make prove \
     T="${selected[*]}" \
     UNIT_TESTS= \
-    GIT_PROVE_OPTS="--timer --jobs $JOBS" \
+    GIT_PROVE_OPTS="--timer --jobs $JOBS --exec $here/git-prove-exec.sh" \
     GIT_TEST_OPTS="--root=$root --verbose-log ${EVAL_UNDER_GIT_TEST_OPTS:-}"

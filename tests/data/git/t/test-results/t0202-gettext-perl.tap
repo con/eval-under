@@ -1,0 +1,5 @@
+TAP version 13
+pragma +strict
+ok 1 - run t0202/test.pl to test Git::I18N.pm
+# passed all 1 test(s)
+1..1

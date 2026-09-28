@@ -18,6 +18,7 @@
 # Consumed by:
 #   bin/ci/matrix.sh        sourced by every other bin/ci script
 #   bin/ci/matrix-json.sh   renders the GitHub `matrix:` value
+#   bin/ci/evals.py         the same, for the bin/ci Python scripts
 #
 # After editing, run `bin/ci/gen-readme-matrix.sh` to refresh the
 # README's badge grid.
@@ -62,7 +63,6 @@ targets:
     needs-root: false
     needs-git-annex: true
 
-  # 174 scripts, ~2 min on ext4; a sync-heavy backend is far slower.
   - name: git
     label: git testsuite
     timeout: 2400
@@ -79,8 +79,8 @@ targets:
     needs-root: true
     needs-git-annex: false
 
-  # ~8500 assertions, run serially; ext4 does it in minutes but a
-  # sync-heavy NFS or BeeGFS mount is an order of magnitude slower.
+  # Run serially; a sync-heavy NFS or BeeGFS mount is an order of
+  # magnitude slower than ext4.
   - name: pjdfstest
     label: pjdfstest
     timeout: 2400

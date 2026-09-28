@@ -2,7 +2,7 @@ name: test
 
 # The whole eval-under matrix, in one workflow.
 #
-# Cells come from .github/matrix.yaml via bin/ci/matrix-json.sh, rather
+# Cells come from evals/matrix.yaml via bin/ci/matrix-json.sh, rather
 # than being spelled out here: adding a filesystem or a suite should be
 # a data edit, and the shell scripts in bin/ci/ read the same file, so
 # they cannot drift from what CI actually runs.
@@ -17,13 +17,15 @@ on:
     paths:
       - "bin/**"
       - "provision/**"
-      - ".github/matrix.yaml"
+      - "evals/matrix.yaml"
+      - "evals/known-issues.yaml"
       - ".github/workflows/test.yaml"
   pull_request:
     paths:
       - "bin/**"
       - "provision/**"
-      - ".github/matrix.yaml"
+      - "evals/matrix.yaml"
+      - "evals/known-issues.yaml"
       - ".github/workflows/test.yaml"
   workflow_dispatch:
   schedule:
@@ -58,6 +60,8 @@ jobs:
     permissions:
       contents: read
       actions: read  # to download artifacts from con/git-annex
+    env:
+      EVAL_UNDER_OUTPUT_DIR: /tmp/eval-under-output/${{ matrix.slug }}
     steps:
       - uses: actions/checkout@v4
 
@@ -80,15 +84,26 @@ jobs:
           git config --global user.email test@github.land
           git config --global user.name  "GitHub Almighty"
 
+      # Known failures are expected; "Check against known issues" decides.
       - name: Run ${{ matrix.target }} under ${{ matrix.backend }}
+        id: suite
+        continue-on-error: true
         run: >-
           sudo -E bin/ci/run-under.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
       - name: Dump failure logs
-        if: failure()
+        if: failure() || steps.suite.outcome == 'failure'
         run: >-
           bin/ci/dump-failure-logs.sh
+          "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
+
+      # !cancelled(), not always(): a run superseded by a newer push would
+      # otherwise record every cell as "incomplete".
+      - name: Check against known issues
+        if: ${{ !cancelled() }}
+        run: >-
+          bin/ci/check-cell.sh
           "${{ matrix.backend }}" "${{ matrix.version }}" "${{ matrix.target }}"
 
       - name: Upload logs
@@ -99,23 +114,24 @@ jobs:
           path: |
             /var/log/beegfs-*
             /opt/eval-under-src/git/t/test-results/**
+            ${{ env.EVAL_UNDER_OUTPUT_DIR }}/**
           if-no-files-found: ignore
 
-      # One tiny artifact per cell, read back by the `badges` job. A
+      # One tiny artifact per cell, read back by the `publish` job. A
       # matrix job cannot contribute to a `needs.*.outputs` map, so this
       # is how a fan-out reports 20 individual verdicts to a fan-in.
       - name: Record cell result
         if: always()
         run: |
-          mkdir -p result
-          echo "${{ job.status }}" > result/conclusion
+          mkdir -p result && echo "${{ job.status }}" > result/conclusion
+          cp "$EVAL_UNDER_OUTPUT_DIR/verdict.json" result/ || true
 
       - name: Upload cell result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.slug }}
-          path: result/conclusion
+          path: result/
 
   publish:
     needs: test

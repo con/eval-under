@@ -1,0 +1,216 @@
+Tests
+  Remote Tests
+    testremote type git
+      init:                                              OK (1.72s)
+      unavailable remote
+        removeKey:                                       OK (0.03s)
+        storeKey:                                        OK (0.05s)
+        checkPresent:                                    OK (0.05s)
+  not enough free space, need 2.69 MB more (use --force to override this check or adjust annex.diskreserve)
+        retrieveKeyFile:                                 OK (0.06s)
+  not enough free space, need 2.65 MB more (use --force to override this check or adjust annex.diskreserve)
+        retrieveKeyFileCheap:                            OK (0.04s)
+      key size 1048576; git remote
+  Detected a filesystem without fifo support.
+  Disabling ssh connection caching.
+  Detected a crippled filesystem.
+        removeKey when not present:                      OK (1.84s)
+        present False:                                   OK (0.05s)
+  not enough free space, need 3.67 MB more (use --force to override this check or adjust annex.diskreserve)
+        storeKey:                                        FAIL
+          Exception: failed to send content to remote
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.storeKey"' to rerun this test only.
+        present True:                                    FAIL (0.05s)
+          ./Command/TestRemote.hs:296:
+          failed
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.present True"' to rerun this test only.
+  not enough free space, need 3.8 MB more (use --force to override this check or adjust annex.diskreserve)
+        storeKey when already present:                   FAIL
+          Exception: failed to send content to remote
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '/key size 1048576; git remote.storeKey when already present/' to rerun this test only.
+        present True:                                    FAIL (0.05s)
+          ./Command/TestRemote.hs:296:
+          failed
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.present True"' to rerun this test only.
+  not enough free space, need 2.83 MB more (use --force to override this check or adjust annex.diskreserve)
+        retrieveKeyFile:                                 FAIL (0.14s)
+          ./Command/TestRemote.hs:296:
+          failed
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.retrieveKeyFile"' to rerun this test only.
+        fsck downloaded object:                          FAIL
+          Exception: .git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key: withBinaryFile: does not exist (No such file or directory)
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.fsck downloaded object"' to rerun this test only.
+  not enough free space, need 2.85 MB more (use --force to override this check or adjust annex.diskreserve)
+        retrieveKeyFile resume from 0:                   FAIL (0.05s)
+          ./Command/TestRemote.hs:296:
+          failed
+          Use -p '/key size 1048576; git remote.retrieveKeyFile resume from 0/' to rerun this test only.
+        fsck downloaded object:                          FAIL
+          Exception: .git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key: withBinaryFile: does not exist (No such file or directory)
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.fsck downloaded object"' to rerun this test only.
+        retrieveKeyFile resume from 33%:                 FAIL
+          Exception: .git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key: openBinaryFile: does not exist (No such file or directory)
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '/key size 1048576; git remote.retrieveKeyFile resume from 33%/' to rerun this test only.
+        fsck downloaded object:                          FAIL
+          Exception: .git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key: withBinaryFile: does not exist (No such file or directory)
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.fsck downloaded object"' to rerun this test only.
+cp: cannot stat '.git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key': No such file or directory
+  not enough free space, need 2.86 MB more (use --force to override this check or adjust annex.diskreserve)
+        retrieveKeyFile resume from end:                 FAIL (0.03s)
+          ./Command/TestRemote.hs:296:
+          failed
+          Use -p '/key size 1048576; git remote.retrieveKeyFile resume from end/' to rerun this test only.
+        fsck downloaded object:                          FAIL
+          Exception: .git/annex/objects/88d/0cc/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key/SHA256E-s1048576--219abc0255d9635d4194df1005dd53ffbdbbb1e64d425248c7d3fbb0666ecce5.this-is-a-test-key: withBinaryFile: does not exist (No such file or directory)
+          HasCallStack backtrace:
+            collectBacktraces, called at libraries/ghc-internal/src/GHC/Internal/Exception.hs:169:13 in ghc-internal:GHC.Internal.Exception
+            toExceptionWithBacktrace, called at libraries/ghc-internal/src/GHC/Internal/IO.hs:260:11 in ghc-internal:GHC.Internal.IO
+            throwIO, called at ./Control/Concurrent/Async.hs:110:7 in tasty-1.5.3-Cx633LXucsH6WTvNpdpDhS:Control.Concurrent.Async
+          
+          
+          Use -p '$0=="Tests.Remote Tests.testremote type git.key size 1048576; git remote.fsck downloaded object"' to rerun this test only.
+        removeKey when present:                          OK (0.03s)
+        present False:                                   OK (0.03s)
+12 out of 22 tests failed (0.00s)
+Tests
+  Repo Tests v10 adjusted unlocked branch
+    Init Tests
+      init:                                       OK (1.15s)
+      add:                                        FAIL (0.79s)
+        ./Test/Framework.hs:100:
+        add with SHA1 failed with unexpected exit code (transcript follows)
+        add sha1foo 
+        
+100%  25 B            142 KiB/s 0s
+                                  
+          not enough free space, need 1.63 MB more (use --force to override this check or adjust annex.diskreserve)
+        
+                                  
+          sha1foo failed to link to annex
+        
+                                  
+failed
+        add: 1 failed
+        
+        Use -p '/add/' to rerun this test only.
+    sop crypto:                                   SKIP
+      
+      Use -p '/sop crypto/' to rerun this test only.
+    upgrade:                                      SKIP
+      
+      Use -p '/upgrade/' to rerun this test only.
+    conflict resolution (uncommitted local file): SKIP
+      
+      Use -p '/conflict resolution (uncommitted local file)/' to rerun this test only.
+    adjusted branch merge regression:             SKIP
+      
+      Use -p '/adjusted branch merge regression/' to rerun this test only.
+    describe:                                     SKIP
+      
+      Use -p '/describe/' to rerun this test only.
+    fsck (local untrusted):                       SKIP
+      
+      Use -p '/fsck (local untrusted)/' to rerun this test only.
+    lock --force:                                 SKIP
+      
+      Use -p '/lock --force/' to rerun this test only.
+    drop (untrusted remote):                      SKIP
+      
+      Use -p '/drop (untrusted remote)/' to rerun this test only.
+    view:                                         SKIP
+      
+      Use -p '/view/' to rerun this test only.
+    git-remote-annex exporttree:                  SKIP
+      
+      Use -p '/git-remote-annex exporttree/' to rerun this test only.
+
+11 out of 12 tests failed (1.94s)
+Tests
+  Repo Tests v10 adjusted unlocked branch
+    Init Tests
+      init:                          OK (1.16s)
+      add:                           FAIL (0.84s)
+        ./Test/Framework.hs:100:
+        add with SHA1 failed with unexpected exit code (transcript follows)
+        add sha1foo 
+        
+100%  25 B            113 KiB/s 0s
+                                  
+          not enough free space, need 1.64 MB more (use --force to override this check or adjust annex.diskreserve)
+        
+                                  
+          sha1foo failed to link to annex
+        
+                                  
+failed
+        add: 1 failed
+        
+        Use -p '/add/' to rerun this test only.
+    gpg crypto:                      SKIP
+      
+      Use -p '/gpg crypto/' to rerun this test only.
+    uninit (in git-annex branch):    SKIP
+      
+      Use -p '/uninit (in git-annex branch)/' to rerun this test only.
+    conflict resolution symlink bit: SKIP
+      
+      Use -p '/conflict resolution symlink bit/' to rerun this test only.
+    union merge regression:          SKIP
+      
+      Use -p '/union merge regression/' to rerun this test only.
+    unused:                          SKIP
+      
+      Use -p '/unused/' to rerun this test only.
+    fsck (bare):                     SKIP
+      
+      Use -p '/fsck (bare)/' to rerun this test only.
+    lock:                            SKIP
+      
+      Use -p '/Repo Tests v10 adjusted unlocked branch.lock/' to rerun this test only.
+    drop (with remote):              SKIP
+      
+      Use -p '/drop (with remote)/' to rerun this test only.
+    log:                             SKIP
+      
+      Use -p '/log/' to rerun this test only.
+    git-remote-annex:                SKIP
+      
+      Use -p '/git-remote-annex/' to rerun this test only.
+
+11 out of 12 tests failed (2.00s)

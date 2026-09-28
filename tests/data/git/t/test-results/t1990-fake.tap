@@ -1,0 +1,11 @@
+TAP version 13
+pragma +strict
+ok 1 - passes
+not ok 2 - fails <&> quoted
+#	false
+ok 3 - broken but fixed # TODO known breakage vanished
+not ok 4 - still broken # TODO known breakage
+# 1 known breakage(s) vanished; please update test(s)
+# still have 1 known breakage(s)
+# failed 1 among remaining 2 test(s)
+1..4
