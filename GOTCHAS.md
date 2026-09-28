@@ -307,6 +307,61 @@ See: [BeeGFS (`bin/eval-under-beegfs`)](#beegfs-bineval-under-beegfs)
 
 See: [Loop git-annex cells: annex.diskreserve](#loop-git-annex-cells-annexdiskreserve)
 
+<a id="sshfs-git-local-clone-hardlink"></a>
+### `sshfs-git-local-clone-hardlink`: local `git clone` verifies its hardlinks, and sshfs synthesises st_ino
+
+**Cells:** `sshfs-git` \
+**Tags:** `fs-divergence` \
+**Tests:** `t0001-init.sh#28,37`, `t0003-attributes.sh#24-25,29,32-34,41`, `t0021-conversion.sh#28-30`, `t0033-safe-directory.sh#16`, `t0035-safe-bare-repository.sh#1,13`, `t0410-partial-clone.sh#34,38`, `t0610-reftable-basics.sh#26-28,48`, `t1013-read-tree-submodule.sh#1-8,10-15,18-28,30-48,51-60,65-68`, `t1060-object-corruption.sh#12`, `t1091-sparse-checkout-builtin.sh#31-32,36-38,47,49,77`, `t1350-config-hooks-path.sh#4`, `t1423-ref-backend.sh#36`, `t1460-refs-migrate.sh#9,24`, `t1500-rev-parse.sh#77`, `t1507-rev-parse-upstream.sh#1-7,9-11,13-14,17-18,21,23-27`, `t1600-index.sh#6`
+
+SFTP's `ATTRS` carries no inode number, so sshfs synthesises `st_ino`
+per path. `git clone <local path>` hardlinks each object and then
+compares `st_mode`/`st_ino`/`st_dev`/`st_size`/`st_uid`/`st_gid`
+against the source (`builtin/clone.c`), so the check fails and the
+clone dies with `fatal: hardlink different from source`. **Plain
+`git clone` of a local path does not work on sshfs at all.**
+
+Each script here clones, or adds a submodule (which clones), in its
+setup, so one failed setup cascades through the script; the scripts
+were attributed by that message appearing in their own logs.
+`git clone --no-hardlinks`, `git clone file://...` and mounting with
+`-o disable_hardlink` all work -- with the option, sshfs fails
+`link()` with `EPERM` instead of pretending, and git falls back to
+copying.
+
+See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
+
+<a id="sshfs-git-no-unix-sockets"></a>
+### `sshfs-git-no-unix-sockets`: git's IPC and credential-cache tests need Unix sockets on the work tree
+
+**Cells:** `sshfs-git` \
+**Tags:** `fs-limitation` \
+**Tests:** `t0052-simple-ipc.sh#1-9`, `t0301-credential-cache.sh#2-3,7-8,10-11,13-23,25-26,28,30,32-33,37-38,40-41,43-52`
+
+sshfs has no Unix sockets: `bind()` on the mount fails with
+`Operation not permitted`, so the credential-cache daemon never
+starts (`unable to bind to .../credential/socket`) and simple-ipc
+finds `no server listening`. `unix-socket=no` in
+`bin/ci/fs-capabilities.sh` predicts both. The same limitation is
+recorded for vfat as `vfat-git-no-unix-sockets`.
+
+See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
+
+<a id="sshfs-git-untriaged"></a>
+### `sshfs-git-untriaged`: remaining git failures on sshfs, not yet attributed
+
+**Cells:** `sshfs-git` \
+**Tags:** `needs-triage` \
+**Tests:** `t0017-env-helper.sh#4`, `t0027-auto-crlf.sh#2076,2078,2081,2096,2102-2104`, `t0450-txt-doc-vs-help.sh#167,347`, `t1002-read-tree-m-u-2way.sh#17,22`, `t1004-read-tree-m-u-wf.sh#9-10,12,15-17`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#435`, `t1301-shared-repo.sh#17`, `t1410-reflog.sh#21`, `t1430-bad-ref-name.sh#17`, `t1461-refs-list.sh#398`, `t1700-split-index.sh#9`
+
+Acknowledged, root cause not run down. Deliberately kept apart from
+the two mechanisms above rather than folded into them: neither the
+hardlink message nor a socket refusal appears in these scripts'
+logs. Candidates worth checking first are sshfs's 1-second mtime
+granularity and its lack of `xattr`/`fifo` support.
+
+See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
+
 <!-- END KNOWN ISSUES -->
 
 ## Root-cause notes
