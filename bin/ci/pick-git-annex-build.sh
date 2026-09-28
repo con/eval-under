@@ -61,21 +61,26 @@ if [ -z "$runs" ]; then
     exit 1
 fi
 
+# An array, not `while read ... <<< "$runs"`: gh inside such a loop
+# shares its stdin and can swallow the remaining lines. </dev/null too.
+mapfile -t candidates <<< "$runs"
 run_id=""
-while read -r id event state created; do
+for line in "${candidates[@]}"; do
+    read -r id event state created <<< "$line"
     case " $events " in
         *" $event "*) ;;
         *) continue ;;
     esac
     n="$(gh api "repos/$repo/actions/runs/$id/artifacts" \
-        --jq '[.artifacts[] | select(.expired==false and (.name | startswith("git-annex-debianstandalone-packages_")))] | length')"
+        --jq '[.artifacts[] | select(.expired==false and (.name | startswith("git-annex-debianstandalone-packages_")))] | length' \
+        </dev/null)"
+    # The run's own conclusion is informational only (see header).
+    echo "I: $repo run $id ($event, $created, run $state): $n package artifact(s)" >&2
     if [ "$n" -gt 0 ]; then
         run_id="$id"
-        # The run's own conclusion is informational only (see header).
-        echo "I: picked $repo run $id ($event, $created, run $state)" >&2
         break
     fi
-done <<< "$runs"
+done
 
 if [ -z "$run_id" ]; then
     echo "E: none of the last $scan $branch runs ($events) has an unexpired debianstandalone artifact" >&2
