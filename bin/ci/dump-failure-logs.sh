@@ -50,6 +50,24 @@ case "$BACKEND" in
             | grep -iE "loop|nfs|${VERSION:-nomatch}" \
             | tail -30 || true
         ;;
+    sshfs)
+        # bin/eval-under-sshfs removes its scratch dir on teardown, so
+        # sshd.log is only still here when teardown was skipped (a crash,
+        # or --keep). Print it when it is: a mount that died mid-suite
+        # says so there and nowhere else.
+        for log in /tmp/eval-under-sshfs-*.scratch/sshd.log; do
+            [ -f "$log" ] || continue
+            echo "=== $log (last 50) ==="
+            sudo tail -50 "$log" || true
+        done
+        # A leaked mount means teardown did not finish, which is itself
+        # the finding when the suite timed out.
+        mounts="$(mount -t fuse.sshfs 2>/dev/null)"
+        echo "=== fuse.sshfs mounts still present ==="
+        echo "${mounts:-(none)}"
+        echo "=== dmesg (fuse-tagged, last 30) ==="
+        sudo dmesg 2>/dev/null | grep -iE 'fuse|sshfs' | tail -30 || true
+        ;;
     *)
         echo "unknown backend: $BACKEND" >&2
         ;;

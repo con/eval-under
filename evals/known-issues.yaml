@@ -268,8 +268,20 @@ issues:
 
       So a `script#N` list is the wrong instrument here: each run draws a
       different sample, and pinning one run's sample is what made this
-      cell report `failing-new` twice. Untried candidates, in order:
-      mounting with `-o attr_timeout=0 -o entry_timeout=0` (and possibly
-      `-o max_conns=N` or `-o sync_read`) to see whether the residue
-      disappears, which would make the cell deterministic and properly
-      xfail-able.
+      cell report `failing-new` twice.
+
+      Mounting with `-o cache=no` (`--no-cache`) was measured, not
+      guessed: five runs of `t0*.sh` at `--jobs 4`, counting failures
+      beyond the 64 this subset's two mechanisms own. Baseline drew 4, 8
+      and 8; `cache=no` drew 1 and 2, for about 7% more wall clock (107s
+      -> 114s). So the cache is implicated and `cache=no` is worth having
+      as a mitigation -- but it does not fix the gate, because
+      `known_issues.py` sets `failing-new` on the *first* uncovered
+      failure and has no tolerance for a flake budget. A rate of one per
+      run still fails the cell most runs.
+
+      Which leaves a decision rather than a patch: cover the whole cell
+      with `tests: ["*"]` as `vfat-pjdfstest` does (green, but it masks
+      the 110 and 46 findings and any future regression), make the cell
+      non-gating, or give the verdict machinery a flake budget. That last
+      one belongs in the machinery, not in this backend's PR.
