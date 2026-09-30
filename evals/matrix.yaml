@@ -96,10 +96,12 @@ targets:
   - name: git-annex-linkannex
     label: git-annex linkAnnex loop
     timeout: 1200
-    # 800 rounds x 2 modes of add/commit is metadata-heavy: measured
-    # ~52MB of an ext4 image's ~83MB usable, and vfat keeps a worktree
-    # copy of every file because it has no symlinks, so it needs more.
-    # The image is sparse, so the headroom costs nothing until used.
+    # Rounds are metadata-heavy: 800 per mode measured ~52MB of an ext4
+    # image's ~83MB usable, and vfat keeps a worktree copy of every file
+    # because it has no symlinks, so it needs more. 200 per mode (the
+    # current default) needs a quarter of that, but the image is sparse,
+    # so the headroom costs nothing until used and leaves room to raise
+    # the rounds by hand without also editing this.
     loop-size-mb: 256
     needs-root: false
     needs-git-annex: true

@@ -27,14 +27,28 @@
 #   TMPDIR  <mount>
 #
 # env (optional):
-#   EVAL_UNDER_LINKANNEX_ROUNDS    rounds per worker (default 200)
+#   EVAL_UNDER_LINKANNEX_ROUNDS    rounds per worker (default 50)
 #   EVAL_UNDER_LINKANNEX_WORKERS   concurrent repos (default 4)
+#
+# 50 x 4 = 200 rounds per mode. Sized by the slowest backend: BeeGFS
+# 8.1.0 took 967s for one mode at 200 x 4 (con/eval-under#11, run
+# 36776837242), so two modes did not fit the 1200s budget and the cell
+# timed out with only mode 1 reported -- while NFS, ext4 and vfat each
+# finished a mode in 100-200s. A quarter of the rounds brings BeeGFS to
+# roughly 240s per mode and keeps this target's point: a rate in
+# minutes, not a pass/fail after twenty.
+#
+# The cost is detection power, and it is the reason to raise this rather
+# than the timeout when hunting something rare: 200 rounds per mode will
+# not reliably show a failure rate below ~1%. For that, run the loop by
+# hand with more rounds (bin/ci/linkannex-loop.sh -n) instead of waiting
+# on a matrix cell.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 
-ROUNDS="${EVAL_UNDER_LINKANNEX_ROUNDS:-200}"
+ROUNDS="${EVAL_UNDER_LINKANNEX_ROUNDS:-50}"
 WORKERS="${EVAL_UNDER_LINKANNEX_WORKERS:-4}"
 
 cd "$HOME"
