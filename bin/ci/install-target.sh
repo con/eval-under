@@ -15,7 +15,8 @@
 # usage:
 #   bin/ci/install-target.sh <target>
 #
-#   target = git-annex | git | stress-ng | pjdfstest
+#   target = git-annex | git-annex-linkannex | git | stress-ng
+#            | mtime-stability | pjdfstest
 #
 # env overrides:
 #   EVAL_UNDER_SRC_DIR         where to clone/build   (/opt/eval-under-src)
@@ -34,7 +35,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=bin/ci/matrix.sh disable=SC1091
 . "$here/matrix.sh"
 
-TARGET="${1:?target required (git-annex|git|stress-ng|pjdfstest)}"
+# No target list spelled out here: target_known below rejects an unknown
+# one and prints the live list from evals/matrix.yaml, which cannot go
+# stale the way this message just did.
+TARGET="${1:?target required (see targets in evals/matrix.yaml)}"
 target_known "$TARGET" || {
     echo "unknown target: $TARGET (expected: ${EVAL_UNDER_TARGETS[*]})" >&2
     exit 1
