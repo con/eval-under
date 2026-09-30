@@ -62,7 +62,20 @@ command -v git-annex >/dev/null 2>&1 || command -v git >/dev/null 2>&1 || {
 mkdir -p "$DIR"
 root="$(cd "$DIR" && pwd)"
 work="$(mktemp -d "$root/linkannex-loop-XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+
+# git-annex makes each object's directory read-only (dr-xr-xr-x), and
+# nothing can unlink through a directory it cannot write. As root that is
+# invisible; under a root-squashed NFS export it is not, and a plain
+# `rm -rf` then printed a screenful of "Permission denied" into the cell
+# log -- burying the TAP output of a target whose only job is to be read
+# -- and left the probe repos on the mount for the next mode's rounds to
+# squeeze past. Make them writable first, as git-annex's own test suite
+# does.
+cleanup() {
+  chmod -R u+w "$work" 2>/dev/null || :
+  rm -rf "$work"
+}
+trap cleanup EXIT
 
 echo "# dir:     $root"
 echo "# mount:   $(findmnt -no FSTYPE,OPTIONS --target "$root" 2>/dev/null || echo '(findmnt unavailable)')"
