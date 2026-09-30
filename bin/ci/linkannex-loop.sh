@@ -21,7 +21,13 @@
 # --report writes "<failures>\t<total>" to FILE, so a caller can turn the
 # result into TAP without parsing this script's prose.
 #
-# exits non-zero if any round failed.
+# exit status:
+#   0  every round linked cleanly
+#   1  some rounds failed in linkAnnex -- the finding this looks for
+#   2  bad usage
+#   3  the harness could not run (repo setup, a worker that vanished)
+#   4  the filesystem filled up, so the run measures free space rather
+#      than linkAnnex; the rate is withheld deliberately
 
 set -u -o pipefail
 
@@ -63,6 +69,29 @@ echo "# mount:   $(findmnt -no FSTYPE,OPTIONS --target "$root" 2>/dev/null || ec
 echo "# version: $(git annex version --raw 2>/dev/null || echo unknown)"
 echo "# plan:    $WORKERS worker(s) x $ROUNDS rounds, mode=$MODE"
 
+# A full filesystem produces the very same "failed to link to annex" /
+# "unlock failed" lines as the inode-cache mismatch this loop exists to
+# measure -- git-annex reports both as a failure to link. Counting them
+# would report a filesystem that merely ran out of room as a 100%
+# linkAnnex failure rate, which is exactly what a 100MB loop image did
+# on ext4 (con/eval-under#11): 800/800 "failures", none of them real.
+# So they abort the run instead of being tallied.
+is_space_failure() {
+  case "$1" in
+    *"not enough free space"*|*"No space left on device"*|*"no space left on device"*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Called from a worker on a space failure: mark it, so the aggregation
+# below can refuse to report a rate, and stop this worker.
+abort_no_space() {
+  printf 'worker %s round %s: OUT OF SPACE -- not a linkAnnex failure, aborting\n%s\n' \
+    "$1" "$2" "$3" >&2
+  : > "$work/nospace.$1"
+}
+
 # Each worker gets its own repo, the way `git annex test` runs its parts.
 run_worker() {
   # Note: `local a=$1 b=$a` would expand $a before the assignment happens,
@@ -77,6 +106,17 @@ run_worker() {
     git config user.email test@example.com
     git config user.name "NFS Probe"
     git annex init -q "probe-$wid" >/dev/null 2>&1
+    # This loop measures the inode-cache comparison, not git-annex's
+    # disk-space policy. Measured on a fresh ext4 image with 83MB free:
+    # `git annex unlock` of a 14-byte file still refuses, with "not
+    # enough free space, need 13.73 MB more" -- so it wanted ~97MB free
+    # to rewrite 14 bytes, and on a small backing image every round
+    # fails before linkAnnex is ever reached. (Whatever computes that
+    # figure, it is far above the 1MB annex.diskreserve is documented to
+    # default to; not investigated further, since this loop has no
+    # business enforcing a reserve at all.) Genuine ENOSPC is still
+    # caught -- see is_space_failure.
+    git config annex.diskreserve 0
   ) || { echo "worker $wid: repo setup failed" >&2; return 3; }
 
   cd "$repo" || return 3
@@ -84,6 +124,7 @@ run_worker() {
     printf 'content %s %s\n' "$wid" "$i" > "f$i"
     if [ "$MODE" = add-unlocked ]; then
       out="$(git -c annex.addunlocked=true annex add "f$i" 2>&1)" || {
+        is_space_failure "$out" && { abort_no_space "$wid" "$i" "$out"; return 4; }
         failures=$((failures + 1))
         printf 'worker %s round %s: add failed\n%s\n' "$wid" "$i" "$out" >&2
         continue
@@ -91,21 +132,25 @@ run_worker() {
       # the To-direction failure is a warning + non-zero exit; also catch the
       # message in case a future version only warns
       case "$out" in *"failed to link to annex"*)
+        is_space_failure "$out" && { abort_no_space "$wid" "$i" "$out"; return 4; }
         failures=$((failures + 1))
         printf 'worker %s round %s:\n%s\n' "$wid" "$i" "$out" >&2 ;;
       esac
     else
-      git annex add -q "f$i" >/dev/null 2>&1 || {
+      out="$(git annex add -q "f$i" 2>&1)" || {
+        is_space_failure "$out" && { abort_no_space "$wid" "$i" "$out"; return 4; }
         failures=$((failures + 1))
-        printf 'worker %s round %s: add failed\n' "$wid" "$i" >&2
+        printf 'worker %s round %s: add failed\n%s\n' "$wid" "$i" "$out" >&2
         continue
       }
       out="$(git annex unlock "f$i" 2>&1)" || {
+        is_space_failure "$out" && { abort_no_space "$wid" "$i" "$out"; return 4; }
         failures=$((failures + 1))
         printf 'worker %s round %s:\n%s\n' "$wid" "$i" "$out" >&2
         continue
       }
       case "$out" in *"unlock failed"*)
+        is_space_failure "$out" && { abort_no_space "$wid" "$i" "$out"; return 4; }
         failures=$((failures + 1))
         printf 'worker %s round %s:\n%s\n' "$wid" "$i" "$out" >&2 ;;
       esac
@@ -121,6 +166,20 @@ for ((w = 0; w < WORKERS; w++)); do
 done
 wait
 end=$(date +%s)
+
+# Exit 4, distinct from "some rounds failed" (1) and "the harness is
+# broken" (3): the run is void rather than negative, and the caller
+# (bin/ci/target-git-annex-linkannex.sh) turns it into an incomplete
+# cell instead of a filesystem verdict the numbers do not support.
+if compgen -G "$work/nospace.*" >/dev/null 2>&1; then
+  {
+    echo "ERROR: the filesystem under test ran out of space."
+    echo "       Any rate from this run would measure free space, not linkAnnex."
+    echo "       Give the cell a bigger backing image: loop-size-mb in"
+    echo "       evals/matrix.yaml, or --size for bin/eval-under loop."
+  } >&2
+  exit 4
+fi
 
 total_failures=0
 for ((w = 0; w < WORKERS; w++)); do

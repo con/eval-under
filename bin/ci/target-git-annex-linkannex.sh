@@ -62,9 +62,21 @@ modes=(unlock add-unlocked)
 rc=0
 for mode in "${modes[@]}"; do
     echo "# === mode: $mode"
+    # pipefail is on and sed always succeeds, so the pipeline's status is
+    # the loop's own -- including its exit 4 for "out of space".
+    loop_rc=0
     "$here/linkannex-loop.sh" --dir "$HOME" --mode "$mode" \
         --rounds "$ROUNDS" --workers "$WORKERS" \
-        --report "$reportdir/$mode" 2>&1 | sed 's/^/# /' || rc=1
+        --report "$reportdir/$mode" 2>&1 | sed 's/^/# /' || loop_rc=$?
+    if [ "$loop_rc" = 4 ]; then
+        # Out of space. Exit without a plan, so the cell comes out
+        # "incomplete" (a harness problem, which it is) rather than
+        # pinning a verdict on the filesystem that the run cannot
+        # support -- see the exit-status list in linkannex-loop.sh.
+        echo "# ABORT: $mode ran out of disk space; no verdict from this cell"
+        exit 4
+    fi
+    [ "$loop_rc" = 0 ] || rc=1
 done
 
 echo "1..${#modes[@]}"
