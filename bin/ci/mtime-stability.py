@@ -145,6 +145,12 @@ def main() -> int:
     )
     p.add_argument("--no-copy", action="store_true", help="control run: stat twice without copying")
     p.add_argument("--quiet", action="store_true", help="only print the summary")
+    p.add_argument(
+        "--tap",
+        action="store_true",
+        help="emit TAP for bin/ci/collect-results.py: three stable points, one per "
+        "stat field, with the rate in the description",
+    )
     args = p.parse_args()
 
     root = os.path.abspath(args.dir)
@@ -156,10 +162,12 @@ def main() -> int:
         capture_output=True,
         text=True,
     ).stdout.strip()
+    # Both modes prefix these with "#", which is a comment in TAP and just
+    # a comment to a human, so there is only one format to read.
     print(f"# directory: {root}")
     print(f"# mount:     {fsinfo or '(findmnt unavailable)'}")
     print(
-        f"# plan:      {args.jobs} worker(s) x {args.rounds} rounds, {args.size}B files, "
+        f"# rounds:    {args.jobs} worker(s) x {args.rounds} rounds, {args.size}B files, "
         f"delay={args.delay}s, {'no copy (control)' if args.no_copy else 'copy via cp'}"
     )
 
@@ -185,12 +193,16 @@ def main() -> int:
 
     total = args.jobs * args.rounds
     elapsed = time.time() - started
-    if mismatches and not args.quiet:
+    if mismatches and not args.quiet and not args.tap:
         print(f"\n# mismatches ({len(mismatches)}):")
         for m in mismatches:
             print(m.describe())
 
     rate = 100.0 * len(mismatches) / total if total else 0.0
+    if args.tap:
+        emit_tap(mismatches, total, elapsed)
+        return 1 if mismatches else 0
+
     print(
         f"\n{len(mismatches)}/{total} rounds saw the inode cache change under an "
         f"unmodified file ({rate:.2f}%), in {elapsed:.1f}s"
@@ -202,6 +214,31 @@ def main() -> int:
         return 1
     print("No mismatch seen: compareStrong would have held for every round.")
     return 0
+
+
+def emit_tap(mismatches: list[Mismatch], total: int, elapsed: float) -> None:
+    """One point per stat field, so the ids are stable across runs.
+
+    Round numbers would not be: a known issue has to be able to name
+    "this filesystem moves the mtime", not "round 417 failed".
+    """
+    print(f"# {len(mismatches)}/{total} rounds changed, in {elapsed:.1f}s")
+    fields = ("inode", "size", "mtime")
+    hits = {f: [m for m in mismatches if f in differing_fields(m.before, m.after)]
+            for f in fields}
+    print(f"1..{len(fields)}")
+    for n, f in enumerate(fields, start=1):
+        bad = hits[f]
+        detail = f"{f}-stable {len(bad)}/{total} rounds changed"
+        if bad:
+            worst = max(abs(m.after.mtime_ns - m.before.mtime_ns) for m in bad)
+            rate = 100.0 * len(bad) / total if total else 0.0
+            detail += f" ({rate:.2f}%), worst mtime delta {worst / 1e9:.9f}s"
+            print(f"not ok {n} - {detail}")
+            for m in bad[:5]:
+                print(f"#   {m.describe().strip()}")
+        else:
+            print(f"ok {n} - {detail}")
 
 
 if __name__ == "__main__":

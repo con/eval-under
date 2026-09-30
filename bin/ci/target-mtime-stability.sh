@@ -45,4 +45,7 @@ cd "$HOME"
 
 # Under load, because the race is a timing one: a single sequential
 # worker on an idle mount can miss it for a long time.
-exec "$here/mtime-stability.py" --dir "$HOME" --rounds "$ROUNDS" --jobs "$JOBS"
+# --tap so bin/ci/collect-results.py can score the cell per stat field;
+# the human-readable lines come through as TAP comments.
+exec "$here/mtime-stability.py" --tap \
+    --dir "$HOME" --rounds "$ROUNDS" --jobs "$JOBS"

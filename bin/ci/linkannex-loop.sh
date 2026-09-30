@@ -16,7 +16,10 @@
 # reports a rate instead of a single pass/fail.
 #
 # usage:
-#   ./nfs-annex-linkannex-loop.sh [-n ROUNDS] [-j WORKERS] [-m MODE] [-d DIR]
+#   linkannex-loop.sh [-n ROUNDS] [-j WORKERS] [-m MODE] [-d DIR] [--report FILE]
+#
+# --report writes "<failures>\t<total>" to FILE, so a caller can turn the
+# result into TAP without parsing this script's prose.
 #
 # exits non-zero if any round failed.
 
@@ -26,6 +29,7 @@ ROUNDS=200
 WORKERS=1
 MODE=unlock
 DIR=.
+REPORT=
 
 usage() { sed -n '3,20p' "$0"; }
 
@@ -35,6 +39,7 @@ while [ $# -gt 0 ]; do
     -j|--workers) WORKERS="$2"; shift 2 ;;
     -m|--mode)    MODE="$2"; shift 2 ;;
     -d|--dir)     DIR="$2"; shift 2 ;;
+    --report)     REPORT="$2"; shift 2 ;;
     -h|--help)    usage; exit 0 ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -132,5 +137,9 @@ printf '\n%s/%s rounds failed in linkAnnex (%s%%), in %ss\n' \
   "$total_failures" "$total" \
   "$(awk -v a="$total_failures" -v b="$total" 'BEGIN{printf "%.2f", b ? 100*a/b : 0}')" \
   "$((end - start))"
+
+if [ -n "$REPORT" ]; then
+  printf '%s\t%s\n' "$total_failures" "$total" > "$REPORT"
+fi
 
 [ "$total_failures" -eq 0 ] || exit 1

@@ -47,15 +47,44 @@ git config --global --get user.email >/dev/null 2>&1 \
 git config --global --get user.name >/dev/null 2>&1 \
     || git config --global user.name "GitHub Almighty"
 
-git annex version | head -1
+# As a TAP comment: everything this target prints but the plan and the
+# points has to be a comment, or the collector would try to read it.
+git annex version | head -1 | sed 's/^/# /'
 
-rc=0
 # Both directions, reported separately: `unlock` exercises linkAnnex
-# From (annex object -> worktree), `add-unlocked` exercises To.
-for mode in unlock add-unlocked; do
-    echo
-    echo "=== mode: $mode"
+# From (annex object -> worktree), `add-unlocked` exercises To. Each
+# mode becomes one TAP point, named after the mode so the id is stable
+# and a known issue can name it; bin/ci/collect-results.py scores them.
+reportdir="$(mktemp -d)"
+trap 'rm -rf "$reportdir"' EXIT
+
+modes=(unlock add-unlocked)
+rc=0
+for mode in "${modes[@]}"; do
+    echo "# === mode: $mode"
     "$here/linkannex-loop.sh" --dir "$HOME" --mode "$mode" \
-        --rounds "$ROUNDS" --workers "$WORKERS" || rc=1
+        --rounds "$ROUNDS" --workers "$WORKERS" \
+        --report "$reportdir/$mode" 2>&1 | sed 's/^/# /' || rc=1
+done
+
+echo "1..${#modes[@]}"
+n=0
+for mode in "${modes[@]}"; do
+    n=$((n + 1))
+    if [ -r "$reportdir/$mode" ]; then
+        read -r failures total < "$reportdir/$mode"
+    else
+        failures=; total=
+    fi
+    if [ -z "${total:-}" ]; then
+        # The loop died before reporting: a result, not a harness error.
+        echo "not ok $n - $mode loop did not report (died before finishing?)"
+        rc=1
+    elif [ "$failures" -eq 0 ]; then
+        echo "ok $n - $mode 0/$total rounds failed"
+    else
+        pct="$(awk -v a="$failures" -v b="$total" 'BEGIN{printf "%.2f", b ? 100*a/b : 0}')"
+        echo "not ok $n - $mode $failures/$total rounds failed ($pct%)"
+    fi
 done
 exit "$rc"
