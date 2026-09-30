@@ -30,6 +30,11 @@ SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 FS="${EVAL_UNDER_LOOP_FS:-${DATALAD_TESTS_TEMP_FS:-vfat}}"
 SIZE_MB="${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-100}}"
 
+ALLOC="${EVAL_UNDER_LOOP_ALLOC:-zero}"
+DIRECT_IO="${EVAL_UNDER_LOOP_DIRECT_IO:-0}"
+MKFS_OPTS="${EVAL_UNDER_LOOP_MKFS_OPTS:-}"
+MOUNT_OPTS="${EVAL_UNDER_LOOP_MOUNT_OPTS:-}"
+
 usage() {
   cat <<'EOF'
 Usage: eval-under-loop [OPTIONS] -- CMD [ARGS...]
@@ -69,6 +74,37 @@ Options (flag / env var / default / purpose):
   --size MB            EVAL_UNDER_LOOP_SIZE_MB        100
       Backing image size in megabytes. Bumped from datalad's original
       10 -- git-annex's testsuite fills that in a few seconds.
+      btrfs refuses anything under 109 MiB.
+
+  --alloc MODE         EVAL_UNDER_LOOP_ALLOC          zero
+      How the backing image gets its size:
+
+        zero       dd from /dev/zero: every block written and allocated
+                   on the host up front. Slow and host-space-hungry at
+                   large sizes (a TB image is a TB of writes), but
+                   works on any host filesystem.
+        sparse     truncate: instant, allocates nothing; the host fills
+                   in blocks as the filesystem inside writes them. The
+                   host running out of space surfaces inside as EIO.
+        fallocate  fallocate(2): instant, reserves every block without
+                   writing it. Fails -- deliberately, with no
+                   write-everything fallback -- where the host does not
+                   support it (e.g. NFS older than 4.2, vfat).
+
+  --direct-io          EVAL_UNDER_LOOP_DIRECT_IO      (unset)
+      Attach with `losetup --direct-io=on`, so image I/O bypasses the
+      host page cache instead of being cached twice (once for the
+      filesystem inside, once for the image file). The host filesystem
+      must support O_DIRECT (tmpfs does not); a warning is printed when
+      the kernel declined.
+
+  --mkfs-opts OPTS     EVAL_UNDER_LOOP_MKFS_OPTS      (none)
+      Extra arguments for mkfs.<fs>, whitespace-split, e.g. "-m single"
+      or "-K" (skip the initial discard) for btrfs.
+
+  --mount-opts OPTS    EVAL_UNDER_LOOP_MOUNT_OPTS     (none)
+      Comma-separated options added to the loop mount's -o, e.g.
+      "discard=async,compress=zstd" for btrfs.
 
   -h, --help
       Print this help.
@@ -97,6 +133,10 @@ while [ $# -gt 0 ]; do
     --set-home) SET_HOME=1; shift ;;
     --fs) FS="$2"; shift 2 ;;
     --size) SIZE_MB="$2"; shift 2 ;;
+    --alloc) ALLOC="$2"; shift 2 ;;
+    --direct-io) DIRECT_IO=1; shift ;;
+    --mkfs-opts) MKFS_OPTS="$2"; shift 2 ;;
+    --mount-opts) MOUNT_OPTS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
@@ -104,6 +144,15 @@ while [ $# -gt 0 ]; do
 done
 
 [ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+case "$ALLOC" in
+  zero|sparse|fallocate) ;;
+  *) echo "unknown --alloc mode: $ALLOC (expected zero|sparse|fallocate)" >&2
+     exit 2 ;;
+esac
+
+# Whitespace-split once here, so an option string cannot glob.
+read -ra MKFS_ARGS <<<"$MKFS_OPTS"
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || {
@@ -149,21 +198,39 @@ LOOP=""
 MNT_CREATED=0
 
 start_loop() {
-  log "creating ${SIZE_MB}MB backing image $IMAGE"
-  # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
-  # used bs=1032192 which is a slightly-off historical vfat-cluster
-  # rounding; bs=1M is simpler and works for every fs we care about.
-  dd if=/dev/zero "of=$IMAGE" bs=1M "count=$SIZE_MB" status=none
+  local losetup_opts=(--find --show)
+  log "creating ${SIZE_MB}MB backing image $IMAGE (--alloc $ALLOC)"
+  case "$ALLOC" in
+    # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
+    # used bs=1032192 which is a slightly-off historical vfat-cluster
+    # rounding; bs=1M is simpler and works for every fs we care about.
+    zero)      dd if=/dev/zero "of=$IMAGE" bs=1M "count=$SIZE_MB" status=none ;;
+    sparse)    truncate -s "${SIZE_MB}M" "$IMAGE" ;;
+    # util-linux fallocate calls fallocate(2) directly; unlike glibc's
+    # posix_fallocate() it never falls back to writing every block.
+    fallocate) fallocate -l "${SIZE_MB}M" "$IMAGE" ;;
+  esac
+  echo "I: image on host: $(du -h --apparent-size "$IMAGE" | cut -f1) apparent," \
+       "$(du -h "$IMAGE" | cut -f1) allocated"
 
-  log "losetup --find --show $IMAGE"
-  LOOP=$("${SUDO[@]}" losetup --find --show "$IMAGE")
+  if [ "$DIRECT_IO" = 1 ]; then losetup_opts+=(--direct-io=on); fi
+  log "losetup ${losetup_opts[*]} $IMAGE"
+  LOOP=$("${SUDO[@]}" losetup "${losetup_opts[@]}" "$IMAGE")
   echo "I: loop device: $LOOP"
+  # losetup falls back to buffered I/O when the host fs cannot do
+  # O_DIRECT; say so rather than let a run be read as direct when not.
+  if [ "$DIRECT_IO" = 1 ] \
+     && [ "$("${SUDO[@]}" losetup --list --noheadings --output DIO "$LOOP" \
+            | tr -d ' ')" != 1 ]; then
+    echo "W: --direct-io requested, but $LOOP is using buffered I/O" >&2
+  fi
 
-  log "mkfs.$FS $LOOP"
-  "${SUDO[@]}" "mkfs.$FS" "$LOOP" >/dev/null
+  log "mkfs.$FS${MKFS_OPTS:+ $MKFS_OPTS} $LOOP"
+  "${SUDO[@]}" "mkfs.$FS" "${MKFS_ARGS[@]}" "$LOOP" >/dev/null
 }
 
 mount_loop() {
+  local opts
   log "mounting $LOOP ($FS) at $MNT"
   [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
@@ -172,10 +239,12 @@ mount_loop() {
   # option to grant the invoking user write access.
   case "$FS" in
     vfat|msdos|exfat|ntfs)
-      "${SUDO[@]}" mount -o "uid=$INVOKER_UID,gid=$INVOKER_GID" "$LOOP" "$MNT"
+      opts="uid=$INVOKER_UID,gid=$INVOKER_GID${MOUNT_OPTS:+,$MOUNT_OPTS}"
+      "${SUDO[@]}" mount -o "$opts" "$LOOP" "$MNT"
       ;;
     *)
-      "${SUDO[@]}" mount "$LOOP" "$MNT"
+      opts="${MOUNT_OPTS:-defaults}"
+      "${SUDO[@]}" mount -o "$opts" "$LOOP" "$MNT"
       "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
       ;;
   esac

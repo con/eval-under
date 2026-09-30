@@ -328,3 +328,12 @@ FAKE
     done
   done
 }
+
+# ------------------------------------------------------- loop backend
+
+@test "loop: an unknown --alloc mode is rejected before anything is created" {
+  run bash -c "TMPDIR='$BATS_TEST_TMPDIR' '$REPO_ROOT/bin/eval-under-loop' --alloc bogus -- true 2>&1"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown --alloc mode: bogus"* ]]
+  [ -z "$(ls "$BATS_TEST_TMPDIR")" ]
+}
