@@ -77,7 +77,22 @@ case "$BACKEND" in
             # need an export that does not squash root, and need to keep
             # their privileges rather than being dropped to the invoker.
             target_needs_root "$TARGET" && opts=(--no-root-squash) ;;
-    sshfs)  opts=() ;;
+    sshfs)
+            opts=()
+            # `git annex test` clones local repos, and a local `git clone`
+            # hardlinks each object and then compares st_ino/st_dev against
+            # the source, which sshfs's synthesised inodes fail -- see
+            # sshfs-git-local-clone-hardlink. Without this the suite dies
+            # in setup over and over and then hangs in `testremote type
+            # git`, so the cell measures nothing at all.
+            #
+            # Deliberately NOT applied to git-annex-linkannex: that target
+            # exists to measure what linkAnnex does on the filesystem, and
+            # disabling hardlinks would have it measure the fallback
+            # instead. Nor to `git`, where the hardlink failure IS the
+            # finding (110 assertions, recorded as a known issue).
+            [ "$TARGET" = git-annex ] && opts+=(--opt disable_hardlink)
+            ;;
     *) echo "unknown backend: $BACKEND" >&2; exit 1 ;;
 esac
 

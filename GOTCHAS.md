@@ -111,6 +111,23 @@ numbers that a filesystem supplies, and sshfs has none to supply, so it
 would not have helped under FUSE2 either; sshfs 3.7 offers only
 `disable_hardlink`, which makes `link()` fail outright.
 
+**What CI does about it.** The `sshfs / git-annex test` cell mounts with
+`-o disable_hardlink`, set per target in `bin/ci/run-under.sh`. Without
+it `git annex test` cannot even reach its own assertions: every group
+dies in setup cloning a local repo, and then `testremote type git` hangs
+until the cell's 2400s timeout, so the cell reports `incomplete` and
+measures nothing (run 36567303570). Measured here with the option on,
+that same group runs `All 126 tests passed (6.29s)` and `add` passes on
+both unlocked branches.
+
+The option is deliberately *not* set for two other cells. For
+`git testsuite` the hardlink failure is the finding -- 110 assertions,
+recorded as `sshfs-git-local-clone-hardlink`. For
+`git-annex linkAnnex loop` the target exists to measure what `linkAnnex`
+does on the filesystem, so disabling hardlinks would have it measure the
+copy fallback instead. The three sshfs cells therefore do not all mount
+the same filesystem, which is worth remembering when comparing them.
+
 Worse than invisible, and worth knowing when a report mentions truncated
 files: immediately after writing one name, the *other* name still reads
 back with size 0 through the mount -- with `-o cache=no` as well. The
@@ -212,6 +229,7 @@ entry in `evals/known-issues.yaml`; what that means for CI is in
 | `test-assumption` | The test suite assumes something the filesystem need not provide. |
 | `harness` | eval-under's own setup (image sizes, mount options, ...), not the filesystem. |
 | `needs-triage` | Acknowledged, root cause not yet run down. |
+| `flaky` | Fails intermittently, in a set of tests that changes from run to run. |
 
 <a id="vfat-not-posix"></a>
 ### `vfat-not-posix`: vfat is not a POSIX filesystem (pjdfstest)
@@ -350,58 +368,56 @@ recorded for vfat as `vfat-git-no-unix-sockets`.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
-<a id="sshfs-git-untriaged"></a>
-### `sshfs-git-untriaged`: remaining git failures on sshfs, not yet attributed
+<a id="sshfs-git-flaky-residue"></a>
+### `sshfs-git-flaky-residue`: the sshfs git cell has a residue of flaky failures, cell-wide
 
 **Cells:** `sshfs-git` \
-**Tags:** `needs-triage` \
-**Tests:** `t0003-attributes.sh#41,48`, `t0017-env-helper.sh#4`, `t0040-parse-options.sh#37`, `t0061-run-command.sh#6,18`, `t0302-credential-store.sh#57`, `t0450-txt-doc-vs-help.sh#131,647,797`, `t0610-reftable-basics.sh#61`, `t1091-sparse-checkout-builtin.sh#21,43,48`, `t1092-sparse-checkout-compatibility.sh#55`, `t1300-config.sh#194,197,237,285,494`, `t1403-show-ref.sh#9`, `t1430-bad-ref-name.sh#26`, `t1450-fsck.sh#36`, `t1461-refs-list.sh#415`, `t1503-rev-parse-verify.sh#4`, `t1700-split-index.sh#10-12,14-15`
+**Tags:** `flaky`, `needs-triage` \
+**Tests:** all (whole cell, not yet narrowed down)
 
-**These are flaky, not fixed divergences, and this entry cannot
-gate the cell.** Two mechanisms above are deterministic; this
-residue is not. Measured three ways:
+**This is a whole-cell entry, chosen deliberately over a test list,
+because the residue moves every run.** The two mechanism entries
+above still report their own counts, so a change in them is still
+visible in the verdict table and here -- but it no longer fails the
+cell. That masking is the cost of this choice.
 
-- The same cell on two CI runs of near-identical code
-  (36476334300, then 36485450259) reported 12 and 18 residual
-  failures with **no overlap**: every id the first run flagged
-  passed in the second, and vice versa. The two mechanism entries
-  meanwhile reproduced exactly both times, 110 and 46.
-- Locally, six runs of `t0003 t0017 t0040 t1700` under sshfs:
-  `t0003`'s six hardlink assertions failed in all six runs, while
-  `t0017#4` failed in one and `t0040#37`, `t1700#10-15` and
-  `t0003#41`/`#48` in none -- although CI has flagged each of them.
-- `prove --jobs 1` is no cleaner than `--jobs 4`, and 14 runs of
-  `t0017` alone were all clean, so it takes the fuller suite's
-  concurrent load to show up at all.
+Measured over four CI runs of the same cell on near-identical code
+(36476334300, 36485450259, 36489189059, 36567303570):
+`local-clone-hardlink` reproduced exactly 110 and `no-unix-sockets`
+exactly 46 in all four, while the residue drew 12, 18, 11 and 12
+failures with no overlap between runs -- ids dropped as "now
+passing" came back, and run 3 brought in three scripts never seen
+before. Two attempts to pin the residue by id each reported
+`failing-new` on the next run.
 
-Some of these tests touch no filesystem semantics whatsoever --
-`t0040#37` "OPT_CALLBACK() and OPT_BIT() work" and `t0017#4`
-"test-tool env-helper --type=ulong" parse arguments and
-environment variables, and `t0450` compares documentation against
-`-h` output. What they do share is capturing output into `>out` /
-`2>err` inside the trash directory on the mount and then grepping
-it, which points at the mount losing or delaying writes under
-concurrent load rather than at any semantic divergence.
+Locally: six runs of `t0003 t0017 t0040 t1700` under sshfs failed
+t0003's six hardlink assertions every time, `t0017#4` once, and
+`t0040#37`, `t1700#10-15`, `t0003#41`/`#48` never, though CI has
+flagged each. `prove --jobs 1` is no cleaner than `--jobs 4`, and
+14 runs of `t0017` alone were all clean, so it takes the fuller
+suite's concurrent load.
 
-So a `script#N` list is the wrong instrument here: each run draws a
-different sample, and pinning one run's sample is what made this
-cell report `failing-new` twice.
+Part of it cannot be filesystem semantics at all: `t0040#37`
+"OPT_CALLBACK() and OPT_BIT() work" and `t0017#4` "test-tool
+env-helper --type=ulong" parse arguments and environment
+variables, and `t0450` compares documentation against `-h` output.
+What they share is capturing output into `>out` / `2>err` inside
+the trash directory on the mount and then grepping it, which points
+at the mount losing or delaying writes under concurrent load.
 
-Mounting with `-o cache=no` (`--no-cache`) was measured, not
-guessed: five runs of `t0*.sh` at `--jobs 4`, counting failures
-beyond the 64 this subset's two mechanisms own. Baseline drew 4, 8
-and 8; `cache=no` drew 1 and 2, for about 7% more wall clock (107s
--> 114s). So the cache is implicated and `cache=no` is worth having
-as a mitigation -- but it does not fix the gate, because
-`known_issues.py` sets `failing-new` on the *first* uncovered
-failure and has no tolerance for a flake budget. A rate of one per
-run still fails the cell most runs.
+`-o cache=no` was measured, not guessed: five runs of `t0*.sh` at
+`--jobs 4`, counting failures beyond the 64 that subset's two
+mechanisms own. Baseline drew 4, 8 and 8; `cache=no` drew 1 and 2,
+for about 7% more wall clock. So the cache is implicated and
+`--no-cache` is worth reaching for -- but it does not fix the gate,
+because `known_issues.py` sets `failing-new` on the *first*
+uncovered failure, with no flake budget. One per run still fails
+the cell.
 
-Which leaves a decision rather than a patch: cover the whole cell
-with `tests: ["*"]` as `vfat-pjdfstest` does (green, but it masks
-the 110 and 46 findings and any future regression), make the cell
-non-gating, or give the verdict machinery a flake budget. That last
-one belongs in the machinery, not in this backend's PR.
+The narrow fix is a flake budget in the verdict machinery, which
+would serve vfat and nfs too; that belongs in its own change, not
+in this backend's. Until then this entry keeps the cell from
+blocking on noise, and the mechanisms above carry the findings.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
