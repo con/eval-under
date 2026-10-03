@@ -451,6 +451,41 @@ here is the honest answer for sshfs as people actually mount it.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
+<a id="sshfs-git-annex-untriaged"></a>
+### `sshfs-git-annex-untriaged`: remaining git-annex test failures on sshfs, not yet attributed
+
+**Cells:** `sshfs-git-annex` \
+**Tags:** `needs-triage` \
+**Tests:** `Tests.Repo Tests v10 locked.concurrent get of dup key regression`, `Tests.Repo Tests v10 locked.fix`, `Tests.Repo Tests v10 locked.export and import of subdir`
+
+Three tests out of 838, identical across two CI runs
+(37093228458 and 37094765390: `pass 835 · fail 3` both times, the
+same three names). Unlike the git cell's residue, this set does not
+wander, so it is listed by name rather than covered cell-wide.
+
+**They are not artefacts of `-o disable_hardlink`.** That was the
+obvious worry, since the option makes `link()` fail outright, so it
+was tested both ways here. Without the option these tests die in
+their *setup* `add`, in the `failed to link to annex` cascade that
+stops the whole suite. With it, setup succeeds and each test
+reaches its own assertion and fails there:
+
+- `fix` -> `fix of moved file failed with unexpected exit code`
+- `export and import of subdir` -> `git commit failed with
+  unexpected exit code`
+
+So the option did not create these; it let the suite run far enough
+to show them. (`concurrent get of dup key regression` was not
+probed locally -- it is listed on CI's verdict alone, measured
+twice.)
+
+Root causes not run down, and deliberately not guessed at: the two
+symptoms above are at different points and need not share one.
+Split into their own issues as causes are found, as
+`vfat-git-untriaged` is meant to be.
+
+See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
+
 <!-- END KNOWN ISSUES -->
 
 ## Root-cause notes
