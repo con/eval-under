@@ -34,6 +34,7 @@ tags:
   test-assumption: The test suite assumes something the filesystem need not provide.
   harness: eval-under's own setup (image sizes, mount options, ...), not the filesystem.
   needs-triage: Acknowledged, root cause not yet run down.
+  flaky: Fails intermittently, in a set of tests that changes from run to run.
 
 issues:
   # ---------------------------------------------------------------- vfat
@@ -153,3 +154,181 @@ issues:
     tests: ["*"]
     tags: [harness, needs-triage]
     links: ["GOTCHAS.md#loop-git-annex-cells-annexdiskreserve"]
+
+  # --------------------------------------------------------------- sshfs
+  - id: sshfs-git-local-clone-hardlink
+    title: local `git clone` verifies its hardlinks, and sshfs synthesises st_ino
+    backends: [sshfs]
+    targets: [git]
+    tests:
+      - "t0001-init.sh#37"
+      - "t0003-attributes.sh#24-25,29,32-34"
+      - "t0021-conversion.sh#28-30"
+      - "t0033-safe-directory.sh#16"
+      - "t0035-safe-bare-repository.sh#1,13"
+      - "t0410-partial-clone.sh#34,38"
+      - "t0610-reftable-basics.sh#26-28"
+      - "t1013-read-tree-submodule.sh#1-8,10-15,18-28,30-48,51-60,65-68"
+      - "t1060-object-corruption.sh#12"
+      - "t1091-sparse-checkout-builtin.sh#31-32,36-38,49,77"
+      - "t1350-config-hooks-path.sh#4"
+      - "t1423-ref-backend.sh#36"
+      - "t1460-refs-migrate.sh#9,24"
+      - "t1500-rev-parse.sh#77"
+      - "t1507-rev-parse-upstream.sh#1-7,9-11,13-14,17-18,21,23-27"
+      - "t1600-index.sh#6"
+    tags: [fs-divergence]
+    links: ["GOTCHAS.md#sshfs-bineval-under-sshfs"]
+    notes: |
+      SFTP's `ATTRS` carries no inode number, so sshfs synthesises `st_ino`
+      per path. `git clone <local path>` hardlinks each object and then
+      compares `st_mode`/`st_ino`/`st_dev`/`st_size`/`st_uid`/`st_gid`
+      against the source (`builtin/clone.c`), so the check fails and the
+      clone dies with `fatal: hardlink different from source`. **Plain
+      `git clone` of a local path does not work on sshfs at all.**
+
+      Each script here clones, or adds a submodule (which clones), in its
+      setup, so one failed setup cascades through the script; the scripts
+      were attributed by that message appearing in their own logs.
+      `git clone --no-hardlinks`, `git clone file://...` and mounting with
+      `-o disable_hardlink` all work -- with the option, sshfs fails
+      `link()` with `EPERM` instead of pretending, and git falls back to
+      copying.
+
+      Test ids seeded from run 36476334300 (git v2.55.0), 110 assertions
+      across 16 scripts.
+
+  - id: sshfs-git-no-unix-sockets
+    title: git's IPC and credential-cache tests need Unix sockets on the work tree
+    backends: [sshfs]
+    targets: [git]
+    tests:
+      - "t0052-simple-ipc.sh#1-9"
+      - "t0301-credential-cache.sh#2-3,7-8,10-11,13-23,25-26,28,30,32-33,37-38,40-41,43-52"
+    tags: [fs-limitation]
+    links: ["GOTCHAS.md#sshfs-bineval-under-sshfs"]
+    notes: |
+      sshfs has no Unix sockets: `bind()` on the mount fails with
+      `Operation not permitted`, so the credential-cache daemon never
+      starts (`unable to bind to .../credential/socket`) and simple-ipc
+      finds `no server listening`. `unix-socket=no` in
+      `bin/ci/fs-capabilities.sh` predicts both. The same limitation is
+      recorded for vfat as `vfat-git-no-unix-sockets`.
+
+  - id: sshfs-git-flaky-residue
+    title: the sshfs git cell has a residue of flaky failures, cell-wide
+    backends: [sshfs]
+    targets: [git]
+    tests: ["*"]
+    tags: [flaky, needs-triage]
+    links: ["GOTCHAS.md#sshfs-bineval-under-sshfs"]
+    notes: |
+      **This is a whole-cell entry, chosen deliberately over a test list,
+      because the residue moves every run.** The two mechanism entries
+      above still report their own counts, so a change in them is still
+      visible in the verdict table and here -- but it no longer fails the
+      cell. That masking is the cost of this choice.
+
+      Measured over four CI runs of the same cell on near-identical code
+      (36476334300, 36485450259, 36489189059, 36567303570):
+      `local-clone-hardlink` reproduced exactly 110 and `no-unix-sockets`
+      exactly 46 in all four, while the residue drew 12, 18, 11 and 12
+      failures with no overlap between runs -- ids dropped as "now
+      passing" came back, and run 3 brought in three scripts never seen
+      before. Two attempts to pin the residue by id each reported
+      `failing-new` on the next run.
+
+      Locally: six runs of `t0003 t0017 t0040 t1700` under sshfs failed
+      t0003's six hardlink assertions every time, `t0017#4` once, and
+      `t0040#37`, `t1700#10-15`, `t0003#41`/`#48` never, though CI has
+      flagged each. `prove --jobs 1` is no cleaner than `--jobs 4`, and
+      14 runs of `t0017` alone were all clean, so it takes the fuller
+      suite's concurrent load.
+
+      Part of it cannot be filesystem semantics at all: `t0040#37`
+      "OPT_CALLBACK() and OPT_BIT() work" and `t0017#4` "test-tool
+      env-helper --type=ulong" parse arguments and environment
+      variables, and `t0450` compares documentation against `-h` output.
+      What they share is capturing output into `>out` / `2>err` inside
+      the trash directory on the mount and then grepping it, which points
+      at the mount losing or delaying writes under concurrent load.
+
+      `-o cache=no` was measured, not guessed: five runs of `t0*.sh` at
+      `--jobs 4`, counting failures beyond the 64 that subset's two
+      mechanisms own. Baseline drew 4, 8 and 8; `cache=no` drew 1 and 2,
+      for about 7% more wall clock. So the cache is implicated and
+      `--no-cache` is worth reaching for -- but it does not fix the gate,
+      because `known_issues.py` sets `failing-new` on the *first*
+      uncovered failure, with no flake budget. One per run still fails
+      the cell.
+
+      The narrow fix is a flake budget in the verdict machinery, which
+      would serve vfat and nfs too; that belongs in its own change, not
+      in this backend's. Until then this entry keeps the cell from
+      blocking on noise, and the mechanisms above carry the findings.
+
+  - id: sshfs-linkannex-unlocked-add
+    title: linkAnnex cannot work on sshfs, so unlocked add fails every round
+    backends: [sshfs]
+    targets: [git-annex-linkannex]
+    tests: [add-unlocked]
+    tags: [fs-divergence]
+    links: ["GOTCHAS.md#sshfs-bineval-under-sshfs"]
+    notes: |
+      Deterministic, and the cleanest statement of this backend's central
+      finding: `200/200 rounds failed in linkAnnex (100.00%)`, while
+      `unlock` in the same run failed `0/200`. So it is not that the mount
+      is slow or racy -- locked operations are fine, and only the path
+      that needs a hardlink to be *observable* fails, every single time,
+      with `f<N> failed to link to annex`.
+
+      Why `unlock` passes and `add-unlocked` does not: unlocking replaces
+      a symlink with a copy, which sshfs does. An unlocked `add` wants to
+      hardlink the work-tree file into `.git/annex/objects` and then see
+      both names share an inode, which SFTP cannot express -- its
+      attribute record carries neither an inode number nor a link count,
+      so sshfs synthesises `st_ino` per path and reports `nlink=1`. See
+      `sshfs-git-local-clone-hardlink` for the same cause in git.
+
+      This cell deliberately does NOT mount with `-o disable_hardlink`,
+      unlike `sshfs / git-annex test`: with the option git-annex falls
+      back to copying and the loop would report a 0% failure rate, i.e.
+      it would measure the fallback rather than linkAnnex. A 100% rate
+      here is the honest answer for sshfs as people actually mount it.
+
+  - id: sshfs-git-annex-untriaged
+    title: remaining git-annex test failures on sshfs, not yet attributed
+    backends: [sshfs]
+    targets: [git-annex]
+    tests:
+      - "Tests.Repo Tests v10 locked.concurrent get of dup key regression"
+      - "Tests.Repo Tests v10 locked.fix"
+      - "Tests.Repo Tests v10 locked.export and import of subdir"
+    tags: [needs-triage]
+    links: ["GOTCHAS.md#sshfs-bineval-under-sshfs"]
+    notes: |
+      Three tests out of 838, identical across two CI runs
+      (37093228458 and 37094765390: `pass 835 · fail 3` both times, the
+      same three names). Unlike the git cell's residue, this set does not
+      wander, so it is listed by name rather than covered cell-wide.
+
+      **They are not artefacts of `-o disable_hardlink`.** That was the
+      obvious worry, since the option makes `link()` fail outright, so it
+      was tested both ways here. Without the option these tests die in
+      their *setup* `add`, in the `failed to link to annex` cascade that
+      stops the whole suite. With it, setup succeeds and each test
+      reaches its own assertion and fails there:
+
+      - `fix` -> `fix of moved file failed with unexpected exit code`
+      - `export and import of subdir` -> `git commit failed with
+        unexpected exit code`
+
+      So the option did not create these; it let the suite run far enough
+      to show them. (`concurrent get of dup key regression` was not
+      probed locally -- it is listed on CI's verdict alone, measured
+      twice.)
+
+      Root causes not run down, and deliberately not guessed at: the two
+      symptoms above are at different points and need not share one.
+      Split into their own issues as causes are found, as
+      `vfat-git-untriaged` is meant to be.

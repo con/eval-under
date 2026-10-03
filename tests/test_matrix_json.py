@@ -41,8 +41,20 @@ class TestMatrixJson(unittest.TestCase):
         self.matrix = evals.load_matrix()
         self.cells = cells()
 
-    def test_every_backend_times_every_target(self):
-        want = len(self.matrix["backends"]) * len(self.matrix["targets"])
+    def test_every_enabled_backend_target_pair(self):
+        """Every backend x target pair is a cell except those
+        cell_enabled() excludes -- a backend that cannot run as root
+        cannot host a root-requiring target.
+
+        Worth more than a bare product: matrix-json.sh decides this in
+        bash (cell_enabled in matrix.sh) and everything else decides it
+        in Python (evals.cell_enabled), so this pins the two together.
+        """
+        pairs = [(b, t) for b in self.matrix["backends"]
+                 for t in self.matrix["targets"]]
+        want = sum(1 for b, t in pairs if evals.cell_enabled(b, t))
+        self.assertLess(want, len(pairs),
+                        "fixture check: some pair should be excluded")
         self.assertEqual(want, len(self.cells))
         self.assertEqual(len({c["slug"] for c in self.cells}), want,
                          "cell slugs must be unique -- they name artifacts")

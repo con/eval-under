@@ -75,6 +75,12 @@ table_md() {
         IFS='|' read -r backend version label <<< "$cell"
         printf '| %s |' "$label"
         for target in "${EVAL_UNDER_TARGETS[@]}"; do
+            # A pair that is not a cell gets no badge: there is nothing to
+            # report, and a badge would imply a result we never measure.
+            if ! cell_enabled "$backend" "$version" "$target"; then
+                printf ' n/a |'
+                continue
+            fi
             slug="$(cell_slug "$backend" "$version" "$target")"
             printf ' [![%s / %s](%s)](%s) |' \
                 "$label" "$(target_label "$target")" \
@@ -103,4 +109,11 @@ if [ "$CHECK" = 1 ]; then
 fi
 
 cp "$new_readme" "$README"
-echo "refreshed the README CI matrix ($((${#EVAL_UNDER_BACKENDS[@]} * ${#EVAL_UNDER_TARGETS[@]})) cells)"
+cells=0
+for cell in "${EVAL_UNDER_BACKENDS[@]}"; do
+    IFS='|' read -r backend version _ <<< "$cell"
+    for target in "${EVAL_UNDER_TARGETS[@]}"; do
+        cell_enabled "$backend" "$version" "$target" && cells=$((cells + 1))
+    done
+done
+echo "refreshed the README CI matrix ($cells cells)"
