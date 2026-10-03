@@ -91,10 +91,15 @@ jobs:
       - name: Install target ${{ matrix.target }}
         run: bin/ci/install-target.sh "${{ matrix.target }}"
 
-      # Only the git-annex target needs the daily build (and the token
-      # that fetching it requires).
+      # Only some targets need the daily build (and the token that
+      # fetching it requires). Which ones is data -- `needs-git-annex`
+      # in evals/matrix.yaml, carried through by matrix-json.sh -- not a
+      # target name spelled out here: a second git-annex-using target
+      # would silently run without git-annex installed.
+      # Indexed, not dotted: the documented form for a property name
+      # containing hyphens.
       - name: Fetch latest git-annex daily build from con/git-annex
-        if: matrix.target == 'git-annex'
+        if: ${{ matrix['needs-git-annex'] }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_ANNEX_RUN_ID: ${{ needs.matrix.outputs.git-annex-run }}

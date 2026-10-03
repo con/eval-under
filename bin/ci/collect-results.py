@@ -212,6 +212,29 @@ def collect_stress_ng(lines: list[str]) -> list[Row]:
     return rows
 
 
+def collect_tap_target(name: str, lines: list[str]) -> list[Row]:
+    """From the TAP a target prints itself, ids taken from the description.
+
+    Shared by mtime-stability and git-annex-linkannex: both print a short
+    fixed plan whose descriptions start with a stable slug, so a known
+    issue can name "mtime-stable" or "add-unlocked" rather than a round
+    number that means nothing on the next run.
+    """
+    tf = TapFile(name)
+    for ln in lines:
+        tf.feed(ln)
+    check_no_dupes([tf])
+    if tf.plan is None:
+        raise Incomplete(f"no TAP plan from target-{name}.sh (suite died?)")
+    if tf.plan != len(tf.points):
+        raise Incomplete(f"{name} TAP planned {tf.plan}, parsed {len(tf.points)}")
+    rows = []
+    for o, d in tf.points.values():
+        slug, _, detail = d.partition(" ")
+        rows.append((slug, o, detail))
+    return rows
+
+
 TASTY_RESULT = re.compile(r"^(?P<ind> *)(?P<name>\S.*?):\s+(?P<res>OK|FAIL|SKIP)\b")
 TASTY_GROUP_SUMMARY = re.compile(
     r"^(?:All (?P<all>\d+) tests passed|(?P<nf>\d+) out of (?P<nt>\d+) tests failed)")
@@ -335,6 +358,9 @@ def main() -> int:
         "pjdfstest": collect_pjdfstest,
         "stress-ng": collect_stress_ng,
         "git-annex": collect_git_annex,
+        "mtime-stability": lambda lines: collect_tap_target("mtime-stability", lines),
+        "git-annex-linkannex": lambda lines: collect_tap_target(
+            "git-annex-linkannex", lines),
     }
     log = a.cell_dir / "suite.log"
     rows, reason = [], ""

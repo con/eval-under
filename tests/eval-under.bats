@@ -316,6 +316,27 @@ FAKE
   done
 }
 
+@test "nfs: --mount-opts and --export-opts are documented and parsed" {
+  run "$REPO_ROOT/bin/eval-under-nfs" --help
+  [ "$status" -eq 0 ]
+  for opt in --mount-opts --export-opts; do
+    if [[ "$output" != *"$opt"* ]]; then
+      echo "eval-under-nfs: --help does not mention $opt" >&2
+      return 1
+    fi
+  done
+  # Parsed rather than rejected, and consuming their argument: --help
+  # after them still reaches the usage text.
+  run "$REPO_ROOT/bin/eval-under-nfs" --mount-opts actimeo=0 --export-opts no_subtree_check --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: eval-under-nfs"* ]]
+}
+
+@test "nfs: --mount-opts without a value is an error, not a silent skip" {
+  run "$REPO_ROOT/bin/eval-under-nfs" --mount-opts
+  [ "$status" -ne 0 ]
+}
+
 @test "every installed backend documents the common options" {
   local b opt
   for b in $("$DISPATCHER" --list); do
