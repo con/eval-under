@@ -41,8 +41,19 @@ class TestMatrixJson(unittest.TestCase):
         self.matrix = evals.load_matrix()
         self.cells = cells()
 
-    def test_every_backend_times_every_target(self):
-        want = len(self.matrix["backends"]) * len(self.matrix["targets"])
+    def test_every_backend_times_every_scheduled_target(self):
+        """Every backend x scheduled target pair is a cell. An
+        `on-demand` target is runnable but is not a cell -- it has no
+        badge and no scheduled job, and runs only via reproduce.yaml.
+
+        Worth more than a bare product: matrix.sh decides this in bash
+        for matrix-json.sh, and evals.py decides it in Python for
+        everything else, so this pins the two together.
+        """
+        scheduled = [t for t in self.matrix["targets"] if not t.get("on-demand")]
+        self.assertLess(len(scheduled), len(self.matrix["targets"]),
+                        "fixture check: some target should be on-demand")
+        want = len(self.matrix["backends"]) * len(scheduled)
         self.assertEqual(want, len(self.cells))
         self.assertEqual(len({c["slug"] for c in self.cells}), want,
                          "cell slugs must be unique -- they name artifacts")
