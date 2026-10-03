@@ -18,6 +18,12 @@
 #   version  backend version, or "n/a"
 #   target   suite to run under it
 #   slug     filename-safe cell id, for artifact names
+#   needs-git-annex
+#            whether this cell's suite needs the git-annex daily build,
+#            straight from evals/matrix.yaml. The workflow gates the
+#            fetch step on it, so adding a git-annex-using target stays
+#            a data edit. Referenced as matrix['needs-git-annex'], the
+#            documented index form for a property name with hyphens.
 #
 # usage:
 #   bin/ci/matrix-json.sh            # all cells
@@ -36,7 +42,9 @@ entries=()
 for cell in "${EVAL_UNDER_BACKENDS[@]}"; do
     IFS='|' read -r backend version label <<< "$cell"
     for target in "${EVAL_UNDER_TARGETS[@]}"; do
-        entries+=("$backend|$version|$label|$target|$(target_label "$target")|$(cell_slug "$backend" "$version" "$target")")
+        needs_ga=0
+        target_needs_git_annex "$target" && needs_ga=1
+        entries+=("$backend|$version|$label|$target|$(target_label "$target")|$(cell_slug "$backend" "$version" "$target")|$needs_ga")
     done
 done
 
@@ -48,13 +56,14 @@ for line in sys.stdin:
     line = line.rstrip("\n")
     if not line:
         continue
-    backend, version, blabel, target, tlabel, slug = line.split("|")
+    backend, version, blabel, target, tlabel, slug, needs_ga = line.split("|")
     include.append({
         "name": "%s / %s" % (blabel, tlabel),
         "backend": backend,
         "version": version,
         "target": target,
         "slug": slug,
+        "needs-git-annex": needs_ga == "1",
     })
 
 if not include:

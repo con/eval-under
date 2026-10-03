@@ -28,6 +28,13 @@ on:
       - "evals/known-issues.yaml"
       - ".github/workflows/test.yaml"
   workflow_dispatch:
+    inputs:
+      git-annex-run:
+        description: >-
+          con/git-annex build-ubuntu.yaml run id to test
+          (empty: newest build with a package)
+        required: false
+        default: ""
   schedule:
     - cron: "17 5 * * 1"  # Mon 05:17 UTC
 
@@ -55,6 +62,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_ANNEX_RUN_ID: ${{ inputs.git-annex-run }}
         run: bin/ci/pick-git-annex-build.sh
 
   test:
@@ -83,10 +91,15 @@ jobs:
       - name: Install target ${{ matrix.target }}
         run: bin/ci/install-target.sh "${{ matrix.target }}"
 
-      # Only the git-annex target needs the daily build (and the token
-      # that fetching it requires).
+      # Only some targets need the daily build (and the token that
+      # fetching it requires). Which ones is data -- `needs-git-annex`
+      # in evals/matrix.yaml, carried through by matrix-json.sh -- not a
+      # target name spelled out here: a second git-annex-using target
+      # would silently run without git-annex installed.
+      # Indexed, not dotted: the documented form for a property name
+      # containing hyphens.
       - name: Fetch latest git-annex daily build from con/git-annex
-        if: matrix.target == 'git-annex'
+        if: ${{ matrix['needs-git-annex'] }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_ANNEX_RUN_ID: ${{ needs.matrix.outputs.git-annex-run }}

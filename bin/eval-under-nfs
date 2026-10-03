@@ -30,6 +30,12 @@ SYNC="${EVAL_UNDER_NFS_SYNC:-${DATALAD_TESTS_NFS_SYNC:-}}"
 # instead of the default (root_squash + drop back to the invoking user).
 NO_ROOT_SQUASH="${EVAL_UNDER_NFS_NO_ROOT_SQUASH:-0}"
 
+# Extra mount(8) / exportfs(8) options, comma separated, appended to the
+# ones derived from the flags above. Two namespaces, two variables: an
+# option valid in one is often rejected by the other.
+EXTRA_MOUNT_OPTS="${EVAL_UNDER_NFS_MOUNT_OPTS:-}"
+EXTRA_EXPORT_OPTS="${EVAL_UNDER_NFS_EXPORT_OPTS:-}"
+
 usage() {
   cat <<'EOF'
 Usage: eval-under-nfs [OPTIONS] -- CMD [ARGS...]
@@ -68,6 +74,26 @@ Options (flag / env var / default / purpose):
       storage). This matters -- git-annex/git issue thousands of fsyncs
       during clone/save/get, and `sync` pushed datalad CI jobs past 6h.
       Enable to reproduce that slowdown locally.
+
+  --mount-opts OPTS    EVAL_UNDER_NFS_MOUNT_OPTS      (unset)
+      Extra options appended to the `mount -t nfs -o` list, comma
+      separated. This is how you reach the client-side knobs the
+      built-in flags do not cover -- `actimeo=0` or `noac` (attribute
+      caching), `lookupcache=none`, `nocto`, `vers=3`, `rsize=`/`wsize=`.
+
+      Attribute caching is not a detail: git-annex compares a file's
+      (inode, size, high-resolution mtime) before and after copying it
+      and fails the operation if they differ, and an NFS client can
+      report two different mtimes for a file nothing wrote to. Mounting
+      with `--mount-opts actimeo=0` turns that class of failure off and
+      is the fastest way to tell "the filesystem lied" from "the code is
+      wrong". See bin/ci/mtime-stability.py.
+
+  --export-opts OPTS   EVAL_UNDER_NFS_EXPORT_OPTS     (unset)
+      Extra options appended to the `exportfs -o` list, comma
+      separated, for server-side knobs such as `no_subtree_check`,
+      `sec=`, `fsid=`. `sync`/`async` and `no_root_squash` have their
+      own flags above; this is for everything else.
 
   --no-root-squash     EVAL_UNDER_NFS_NO_ROOT_SQUASH  (unset)
       Export with `no_root_squash` and run the wrapped command as root
@@ -108,6 +134,8 @@ while [ $# -gt 0 ]; do
     --mount-point) MNT="$2"; shift 2 ;;
     --set-home) SET_HOME=1; shift ;;
     --sync) SYNC=1; shift ;;
+    --mount-opts) EXTRA_MOUNT_OPTS="$2"; shift 2 ;;
+    --export-opts) EXTRA_EXPORT_OPTS="$2"; shift 2 ;;
     --no-root-squash) NO_ROOT_SQUASH=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -129,6 +157,12 @@ fi
 EXPORT_OPTS="$NFS_OPTS"
 if [ "$NO_ROOT_SQUASH" != 0 ]; then
   EXPORT_OPTS="$EXPORT_OPTS,no_root_squash"
+fi
+if [ -n "$EXTRA_MOUNT_OPTS" ]; then
+  NFS_OPTS="$NFS_OPTS,$EXTRA_MOUNT_OPTS"
+fi
+if [ -n "$EXTRA_EXPORT_OPTS" ]; then
+  EXPORT_OPTS="$EXPORT_OPTS,$EXTRA_EXPORT_OPTS"
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
