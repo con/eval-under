@@ -421,6 +421,36 @@ blocking on noise, and the mechanisms above carry the findings.
 
 See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
 
+<a id="sshfs-linkannex-unlocked-add"></a>
+### `sshfs-linkannex-unlocked-add`: linkAnnex cannot work on sshfs, so unlocked add fails every round
+
+**Cells:** `sshfs-git-annex-linkannex` \
+**Tags:** `fs-divergence` \
+**Tests:** `add-unlocked`
+
+Deterministic, and the cleanest statement of this backend's central
+finding: `200/200 rounds failed in linkAnnex (100.00%)`, while
+`unlock` in the same run failed `0/200`. So it is not that the mount
+is slow or racy -- locked operations are fine, and only the path
+that needs a hardlink to be *observable* fails, every single time,
+with `f<N> failed to link to annex`.
+
+Why `unlock` passes and `add-unlocked` does not: unlocking replaces
+a symlink with a copy, which sshfs does. An unlocked `add` wants to
+hardlink the work-tree file into `.git/annex/objects` and then see
+both names share an inode, which SFTP cannot express -- its
+attribute record carries neither an inode number nor a link count,
+so sshfs synthesises `st_ino` per path and reports `nlink=1`. See
+`sshfs-git-local-clone-hardlink` for the same cause in git.
+
+This cell deliberately does NOT mount with `-o disable_hardlink`,
+unlike `sshfs / git-annex test`: with the option git-annex falls
+back to copying and the loop would report a 0% failure rate, i.e.
+it would measure the fallback rather than linkAnnex. A 100% rate
+here is the honest answer for sshfs as people actually mount it.
+
+See: [sshfs (`bin/eval-under-sshfs`)](#sshfs-bineval-under-sshfs)
+
 <!-- END KNOWN ISSUES -->
 
 ## Root-cause notes
