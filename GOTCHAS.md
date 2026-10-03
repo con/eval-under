@@ -19,14 +19,17 @@ rediscovered the hard way.
 
 ### Loop (`bin/eval-under-loop`)
 
-A sparse backing image is `dd`'d, `mkfs.<fs>`'d, and loop-mounted.
+A backing image is created under `$TMPDIR`, `mkfs.<fs>`'d, and
+loop-mounted.
 
 | Knob | Value | Why |
 | --- | --- | --- |
-| `mkfs` options | none -- distro defaults | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. |
-| Image size | per target, `loop-size-mb` in `evals/matrix.yaml` | `git annex test` needs room for many small objects; the other three do not. |
+| `mkfs` options | none -- distro defaults | Whatever a user gets from `mkfs.ext4 /dev/sdX`, deliberately. `--mkfs-opts` adds some; CI passes none. |
+| Image size | per target, `loop-size-mb` in `evals/matrix.yaml` | `git annex test` needs room for many small objects; the other three do not. btrfs refuses anything under 109 MiB. |
+| Image allocation | `--alloc zero`: `dd if=/dev/zero`, every block written | Works on any host fs. `sparse` (`truncate`) and `fallocate` are instant, for large images; `fallocate` fails outright where the host lacks it (NFS < 4.2, ramfs) rather than silently writing every block -- though vfat implements it by zeroing in the kernel. |
+| Loop I/O | buffered (image cached in the host page cache) | `--direct-io` attaches with `losetup --direct-io=on`; on a host fs without O_DIRECT (ramfs; tmpfs before Linux 6.6) current kernels refuse to attach and the backend stops with an error; older ones attach buffered and the backend warns. |
 | Mount (vfat, msdos, exfat, ntfs) | `-o uid=<invoker>,gid=<invoker>` | These filesystems store no ownership. Without `uid=`, everything belongs to root and an unprivileged wrapped command cannot write. |
-| Mount (everything else) | plain `mount`, then `chown <invoker>` on the mountpoint | ext4/xfs/btrfs carry real ownership; setting it once on the root is enough. |
+| Mount (everything else) | `mount -o defaults`, then `chown <invoker>` on the mountpoint | ext4/xfs/btrfs carry real ownership; setting it once on the root is enough. |
 
 **The vfat consequence worth knowing.** `fmask`, `dmask` and `umask` are
 left at kernel defaults, so every file on the mount reads as mode `0755`

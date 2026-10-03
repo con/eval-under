@@ -167,6 +167,11 @@ sudo bin/eval-under nfs --set-home -- bash -c 'cd "$HOME" && git annex test'
 sudo bin/eval-under nfs --set-home --mount-opts actimeo=0 -- \
   bash -c 'cd "$HOME" && git annex test'
 
+# A large btrfs volume without writing it out first: sparse image,
+# page cache bypassed for the image file
+sudo bin/eval-under loop --fs btrfs --size 2000000 --alloc sparse --direct-io \
+  --mount-opts discard=async -- bash -c 'df -h "$TMPDIR"'
+
 # Skip teardown to poke around after a failure
 sudo bin/eval-under beegfs --set-home --keep -- some-failing-command
 
@@ -210,7 +215,7 @@ into `bin/eval-under`, bumped with each release tag.
 | `bin/eval-under`                         | Dispatcher: routes to `bin/eval-under-<backend>`                                   |
 | `bin/eval-under-beegfs`                  | BeeGFS backend (containerised cluster + kernel client mount)                       |
 | `bin/eval-under-nfs`                     | NFS backend (localhost loopback export)                                            |
-| `bin/eval-under-loop`                    | Loop-device backend (dd + losetup + mkfs.<fs> + mount)                             |
+| `bin/eval-under-loop`                    | Loop-device backend (image + losetup + mkfs.<fs> + mount)                          |
 | `fixtures/beegfs/docker-compose-v7.yml`  | BeeGFS v7 test cluster (mgmtd + meta + storage), `network_mode: host`              |
 | `fixtures/beegfs/docker-compose-v8.yml`  | Same, for BeeGFS v8.x (different mgmtd command style / gRPC control plane)         |
 | `fixtures/beegfs/beegfs-*.conf.template` | Minimal client + helperd confs for the throwaway cluster                           |

@@ -6,7 +6,8 @@
 # discovery, dispatch, and version reporting.
 #
 # Everything here is unprivileged and mounts nothing -- it covers the
-# entry point, not the backends' actual mount/teardown logic (that needs
+# entry point and the backends' option parsing, not their mount/teardown
+# logic (that needs
 # root, a kernel module, and a live cluster; see the CI matrix). The
 # dispatcher is exercised against throwaway trees of stub backends, so
 # the suite does not change shape every time a real backend is added.
@@ -347,5 +348,45 @@ FAKE
         return 1
       fi
     done
+  done
+}
+
+# ------------------------------------------------------- loop backend
+
+@test "loop: image/mkfs/mount options are documented and parsed" {
+  run "$REPO_ROOT/bin/eval-under-loop" --help
+  [ "$status" -eq 0 ]
+  for opt in --alloc --direct-io --mkfs-opts --mount-opts \
+             EVAL_UNDER_LOOP_ALLOC EVAL_UNDER_LOOP_DIRECT_IO \
+             EVAL_UNDER_LOOP_MKFS_OPTS EVAL_UNDER_LOOP_MOUNT_OPTS; do
+    [[ "$output" == *"$opt"* ]] || { echo "--help lacks $opt" >&2; return 1; }
+  done
+  # Each value-taking option must consume exactly its value, or --help
+  # would be swallowed / rejected as an unknown arg.
+  run "$REPO_ROOT/bin/eval-under-loop" --alloc sparse --direct-io \
+    --mkfs-opts "-m 0" --mount-opts noatime --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Usage: eval-under-loop"* ]]
+}
+
+@test "loop: --mkfs-opts without a value is an error, not a silent skip" {
+  run "$REPO_ROOT/bin/eval-under-loop" --mkfs-opts
+  [ "$status" -ne 0 ]
+}
+
+@test "loop: an unknown --alloc mode is rejected with exit 2" {
+  run bash -c "'$REPO_ROOT/bin/eval-under-loop' --alloc bogus -- true 2>&1"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown --alloc mode: bogus"* ]]
+}
+
+@test "loop: a non-integer or zero --size is rejected with exit 2" {
+  local size
+  for size in 1.5 -5 0 abc ""; do
+    run bash -c "'$REPO_ROOT/bin/eval-under-loop' --size '$size' -- true 2>&1"
+    if [ "$status" -ne 2 ] || [[ "$output" != *"--size must be a positive integer"* ]]; then
+      echo "--size '$size': expected exit 2, got $status: $output" >&2
+      return 1
+    fi
   done
 }

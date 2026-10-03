@@ -5,8 +5,8 @@
 # Generated with Claude Code 2.1.233 / Claude Opus 4.7
 #
 # eval-under-loop: run a command with TMPDIR / DATALAD_TESTS_TEMP_DIR (and
-# optionally HOME) pointing at a loop-mounted local filesystem (dd a backing
-# image, losetup, mkfs.<fs>, mount).
+# optionally HOME) pointing at a loop-mounted local filesystem (create a
+# backing image, losetup, mkfs.<fs>, mount).
 #
 # Backend of the eval-under framework. Absorbed from datalad's
 # tools/eval_under_testloopfs, with framework env-var names, a teardown
@@ -30,13 +30,19 @@ SET_HOME="${EVAL_UNDER_HOME_ON_MOUNT:-0}"
 FS="${EVAL_UNDER_LOOP_FS:-${DATALAD_TESTS_TEMP_FS:-vfat}}"
 SIZE_MB="${EVAL_UNDER_LOOP_SIZE_MB:-${DATALAD_TESTS_TEMP_FSSIZE:-100}}"
 
+ALLOC="${EVAL_UNDER_LOOP_ALLOC:-zero}"
+DIRECT_IO="${EVAL_UNDER_LOOP_DIRECT_IO:-0}"
+MKFS_OPTS="${EVAL_UNDER_LOOP_MKFS_OPTS:-}"
+MOUNT_OPTS="${EVAL_UNDER_LOOP_MOUNT_OPTS:-}"
+
 usage() {
   cat <<'EOF'
 Usage: eval-under-loop [OPTIONS] -- CMD [ARGS...]
 
 Run CMD with TMPDIR / DATALAD_TESTS_TEMP_DIR (and optionally HOME)
 pointing at a loop-mounted local filesystem. A fresh backing image is
-dd'd, mkfs.<fs>'d, and loop-mounted for the duration of the command.
+created (see --alloc), mkfs.<fs>'d, and loop-mounted for the duration
+of the command.
 
 Requires `mkfs.<fs>` for the chosen filesystem. For the default
 (`vfat`) that means `dosfstools`. Also common: `xfsprogs` (xfs),
@@ -69,6 +75,45 @@ Options (flag / env var / default / purpose):
   --size MB            EVAL_UNDER_LOOP_SIZE_MB        100
       Backing image size in megabytes. Bumped from datalad's original
       10 -- git-annex's testsuite fills that in a few seconds.
+      btrfs refuses anything under 109 MiB.
+
+  --alloc MODE         EVAL_UNDER_LOOP_ALLOC          zero
+      How the backing image gets its size:
+
+        zero       dd from /dev/zero: every block written and allocated
+                   on the host up front. Slow and host-space-hungry at
+                   large sizes (a TB image is a TB of writes), but
+                   works on any host filesystem.
+        sparse     truncate: instant, allocates nothing; the host fills
+                   in blocks as the filesystem inside writes them. If
+                   the host runs out of space, writes inside the image
+                   fail with I/O errors rather than ENOSPC.
+        fallocate  fallocate(2): reserves every block without writing
+                   it -- instant on most hosts (vfat zeroes them in the
+                   kernel, so not there). Fails, with no
+                   write-everything fallback of its own, where the host
+                   does not support it (NFS older than 4.2, ramfs, ext4
+                   without extents).
+
+  --direct-io          EVAL_UNDER_LOOP_DIRECT_IO      (unset)
+      Attach with `losetup --direct-io=on`, so image I/O bypasses the
+      host page cache instead of being cached twice (once for the
+      filesystem inside, once for the image file). The env var turns
+      it on when set to 1. The host filesystem must support O_DIRECT
+      (ramfs does not; tmpfs does since Linux 6.6): current kernels
+      then refuse to attach, and this backend stops with an error.
+      Older kernels may attach buffered instead; that is warned about.
+
+  --mkfs-opts OPTS     EVAL_UNDER_LOOP_MKFS_OPTS      (unset)
+      Extra arguments for mkfs.<fs>, split on whitespace (newlines
+      included) with no quoting -- so no argument can contain a space.
+      E.g. "-m single" or "-K" (skip the initial discard) for btrfs.
+
+  --mount-opts OPTS    EVAL_UNDER_LOOP_MOUNT_OPTS     (unset)
+      Comma-separated options for the loop mount's -o (appended to
+      uid=/gid= for vfat and friends), e.g.
+      "discard=async,compress=zstd" for btrfs. With "ro" the mountpoint
+      cannot be chown'd to the invoking user; that is warned about.
 
   -h, --help
       Print this help.
@@ -97,6 +142,10 @@ while [ $# -gt 0 ]; do
     --set-home) SET_HOME=1; shift ;;
     --fs) FS="$2"; shift 2 ;;
     --size) SIZE_MB="$2"; shift 2 ;;
+    --alloc) ALLOC="$2"; shift 2 ;;
+    --direct-io) DIRECT_IO=1; shift ;;
+    --mkfs-opts) MKFS_OPTS="$2"; shift 2 ;;
+    --mount-opts) MOUNT_OPTS="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     *) echo "unknown arg: $1" >&2; usage >&2; exit 2 ;;
@@ -104,6 +153,21 @@ while [ $# -gt 0 ]; do
 done
 
 [ $# -gt 0 ] || { echo "no command given" >&2; usage >&2; exit 2; }
+
+case "$SIZE_MB" in
+  ''|*[!0-9]*|0) echo "--size must be a positive integer (MB), got: $SIZE_MB" >&2
+                 exit 2 ;;
+esac
+
+case "$ALLOC" in
+  zero|sparse|fallocate) ;;
+  *) echo "unknown --alloc mode: $ALLOC (expected zero|sparse|fallocate)" >&2
+     exit 2 ;;
+esac
+
+# Whitespace-split once here, so an option string cannot glob. read
+# stops at the first newline, so fold those into spaces first.
+read -ra MKFS_ARGS <<<"${MKFS_OPTS//$'\n'/ }"
 
 if [ "$(id -u)" -ne 0 ]; then
   command -v sudo >/dev/null || {
@@ -149,21 +213,45 @@ LOOP=""
 MNT_CREATED=0
 
 start_loop() {
-  log "creating ${SIZE_MB}MB backing image $IMAGE"
-  # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
-  # used bs=1032192 which is a slightly-off historical vfat-cluster
-  # rounding; bs=1M is simpler and works for every fs we care about.
-  dd if=/dev/zero "of=$IMAGE" bs=1M "count=$SIZE_MB" status=none
+  local losetup_opts=(--find --show)
+  log "creating ${SIZE_MB}MB backing image $IMAGE (--alloc $ALLOC)"
+  case "$ALLOC" in
+    # Use bs=1M count=SIZE_MB (portable, unambiguous). datalad's original
+    # used bs=1032192 which is a slightly-off historical vfat-cluster
+    # rounding; bs=1M is simpler and works for every fs we care about.
+    zero)      dd if=/dev/zero "of=$IMAGE" bs=1M "count=$SIZE_MB" status=none ;;
+    sparse)    truncate -s "${SIZE_MB}M" "$IMAGE" ;;
+    # util-linux fallocate calls fallocate(2) directly; unlike glibc's
+    # posix_fallocate() it never falls back to writing every block.
+    fallocate) fallocate -l "${SIZE_MB}M" "$IMAGE" ;;
+  esac
+  echo "I: image on host: $(du -h --apparent-size "$IMAGE" | cut -f1) apparent," \
+       "$(du -h "$IMAGE" | cut -f1) allocated"
 
-  log "losetup --find --show $IMAGE"
-  LOOP=$("${SUDO[@]}" losetup --find --show "$IMAGE")
+  if [ "$DIRECT_IO" = 1 ]; then losetup_opts+=(--direct-io=on); fi
+  log "losetup ${losetup_opts[*]} $IMAGE"
+  if ! LOOP=$("${SUDO[@]}" losetup "${losetup_opts[@]}" "$IMAGE"); then
+    if [ "$DIRECT_IO" = 1 ]; then
+      echo "E: losetup --direct-io=on failed; the host filesystem under" \
+           "$IMAGE likely lacks O_DIRECT. Retry without --direct-io." >&2
+    fi
+    exit 1
+  fi
   echo "I: loop device: $LOOP"
+  # Older kernels attach buffered rather than refuse when the host fs
+  # cannot do O_DIRECT; say so rather than let a run be read as direct.
+  if [ "$DIRECT_IO" = 1 ] \
+     && [ "$("${SUDO[@]}" losetup --list --noheadings --output DIO "$LOOP" \
+            | tr -d ' ')" != 1 ]; then
+    echo "W: --direct-io requested, but $LOOP is using buffered I/O" >&2
+  fi
 
-  log "mkfs.$FS $LOOP"
-  "${SUDO[@]}" "mkfs.$FS" "$LOOP" >/dev/null
+  log "mkfs.$FS${MKFS_ARGS[*]:+ ${MKFS_ARGS[*]}} $LOOP"
+  "${SUDO[@]}" "mkfs.$FS" "${MKFS_ARGS[@]}" "$LOOP" >/dev/null
 }
 
 mount_loop() {
+  local opts
   log "mounting $LOOP ($FS) at $MNT"
   [ -d "$MNT" ] || MNT_CREATED=1
   "${SUDO[@]}" mkdir -p "$MNT"
@@ -172,11 +260,14 @@ mount_loop() {
   # option to grant the invoking user write access.
   case "$FS" in
     vfat|msdos|exfat|ntfs)
-      "${SUDO[@]}" mount -o "uid=$INVOKER_UID,gid=$INVOKER_GID" "$LOOP" "$MNT"
+      opts="uid=$INVOKER_UID,gid=$INVOKER_GID${MOUNT_OPTS:+,$MOUNT_OPTS}"
+      "${SUDO[@]}" mount -o "$opts" "$LOOP" "$MNT"
       ;;
     *)
-      "${SUDO[@]}" mount "$LOOP" "$MNT"
-      "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT"
+      opts="${MOUNT_OPTS:-defaults}"
+      "${SUDO[@]}" mount -o "$opts" "$LOOP" "$MNT"
+      "${SUDO[@]}" chown "$INVOKER_UID:$INVOKER_GID" "$MNT" \
+        || echo "W: could not chown $MNT (mounted with -o $opts)" >&2
       ;;
   esac
   "${SUDO[@]}" mount | grep -F "$MNT" | sed 's/^/I: /'
