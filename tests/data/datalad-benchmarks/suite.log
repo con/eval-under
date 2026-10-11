@@ -1,0 +1,23 @@
+# datalad 1.7.1 (PyPI sdist 1.7.1), asv 0.6.5, asv-runner 0.2.1
+# git-annex version: 10.20240129
+# · Discovering benchmarks
+# · Running 4 total benchmarks (1 commits * 1 environments * 4 benchmarks)
+# [ 0.00%] · For datalad commit c1e7ef9b <master>:
+# [ 0.00%] ·· Building for existing-py_opt_eval-under-src_datalad-venv_bin_python3
+# [ 0.00%] ·· Benchmarking existing-py_opt_eval-under-src_datalad-venv_bin_python3
+# [25.00%] ··· core.startup.time_import                                   100±8ms
+# [50.00%] ··· core.startup.time_import_api                              477±20ms
+# [75.00%] ··· plugins.addurls.addurls1.time_addurls                           ok
+# [75.00%] ··· ================== ============
+# [100.00%] ··· save_run.save_since_flat.time_save_since                        ok
+# [100.00%] ··· ================= ===========
+# asv run exited 0
+1..7
+ok 1 - core.startup.time_import 100ms (IQR 98.1ms..113ms, 5 samples)
+ok 2 - core.startup.time_import_api 477ms (IQR 457ms..501ms, 5 samples)
+ok 3 - plugins.addurls.addurls1.time_addurls(None) 1.09s (IQR 1.07s..1.15s, 5 samples)
+ok 4 - plugins.addurls.addurls1.time_addurls('*') 570ms (IQR 559ms..580ms, 5 samples)
+ok 5 - save_run.save_since_flat.time_save_since(1) 77.6ms (IQR 77.4ms..110ms, 5 samples)
+ok 6 - save_run.save_since_flat.time_save_since(5) 96.3ms (IQR 81.2ms..105ms, 5 samples)
+ok 7 - save_run.save_since_flat.time_save_since(20) 80.4ms (IQR 78.4ms..83.5ms, 5 samples)
+

@@ -356,7 +356,9 @@ the job log alone.
    failure no issue covers, by test id.
 2. Then the suite's own summary block in the log: `prove`'s `Test
    Summary Report` for `git` and `pjdfstest`, the pass/skip/fail tally
-   for `stress-ng`, tasty's `N out of M tests failed` for `git-annex`.
+   for `stress-ng`, tasty's `N out of M tests failed` for `git-annex`,
+   and for `datalad-benchmarks` asv's `failed` lines, each followed by
+   the benchmark's traceback (asv runs with `--show-stderr`).
 3. Then the `=== ... failures ===` dump printed by
    `bin/ci/dump-failure-logs.sh`, which names the failing assertions and
    their output.

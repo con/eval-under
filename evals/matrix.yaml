@@ -42,6 +42,20 @@ refs:
   # Master builds clean, so pin a commit on master instead -- same
   # determinism, minus the patch we would otherwise have to carry.
   pjdfstest: 85a8aea9e685999ef0540392fd80535f873d7ff7
+  # The datalad-benchmarks target takes DataLad's release sdist from
+  # PyPI -- the release bundle, which ships benchmarks/ next to the
+  # package -- and installs that same tarball, so the benchmarks and the
+  # code they time come from one release by construction.
+  datalad: 1.7.1
+  # Provides the `ls` that api.supers.time_ls* time; it left DataLad core.
+  datalad-deprecated: 1.0.1
+  # asv-runner >= 0.2.2 runs a class's setup() before its setup_cache
+  # (airspeed-velocity/asv_runner#52), breaking every DataLad benchmark
+  # whose setup() reads what setup_cache wrote, and asv >= 0.6.6 needs
+  # asv-runner >= 0.2.5. DataLad's own CI caps both for that reason
+  # (.github/workflows/benchmarks.yml); these are the tops of its ranges.
+  asv: 0.6.5
+  asv-runner: 0.2.1
 
 # Column order of the README CI matrix.
 #
@@ -114,6 +128,23 @@ targets:
     loop-size-mb: 256
     needs-root: true
     needs-git-annex: false
+
+  # DataLad's asv benchmarks (refs.datalad above), on the same git-annex
+  # build as the git-annex column. Timings, not conformance: a cell is
+  # red only for a benchmark that errored, hit its own asv timeout, or
+  # was not reached in time.
+  - name: datalad-benchmarks
+    label: DataLad benchmarks
+    # ~7 min on ext4, half of it the 10 x 1000-file hierarchy; the
+    # target stops itself short of this and reports what it did not
+    # reach, rather than losing every timing to the timeout.
+    timeout: 2400
+    # Inodes, not bytes, are what runs out: one copy of that hierarchy is
+    # ~79k inodes (465MB used at peak), and mkfs.ext4's default of one
+    # inode per 16KB gives a 1024MB image only 65536.
+    loop-size-mb: 2048
+    needs-root: false
+    needs-git-annex: true
 
 # Row order of the README CI matrix. `version` is the literal "n/a" for
 # backends with nothing to pin (see bin/ci/install-backend.sh).

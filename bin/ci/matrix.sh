@@ -70,6 +70,10 @@ out.append(": \"${EVAL_UNDER_REPO_SLUG:=%s}\"" % q(d["repo-slug"]))
 out.append(": \"${EVAL_UNDER_SRC_DIR:=%s}\"" % q(d["src-dir"]))
 out.append(": \"${EVAL_UNDER_GIT_REF:=%s}\"" % q(d["refs"]["git"]))
 out.append(": \"${EVAL_UNDER_PJDFSTEST_REF:=%s}\"" % q(d["refs"]["pjdfstest"]))
+out.append(": \"${EVAL_UNDER_DATALAD_REF:=%s}\"" % q(d["refs"]["datalad"]))
+out.append(": \"${EVAL_UNDER_DATALAD_DEPRECATED_REF:=%s}\"" % q(d["refs"]["datalad-deprecated"]))
+out.append(": \"${EVAL_UNDER_ASV_REF:=%s}\"" % q(d["refs"]["asv"]))
+out.append(": \"${EVAL_UNDER_ASV_RUNNER_REF:=%s}\"" % q(d["refs"]["asv-runner"]))
 
 print("\n".join(out))
 PYEOF
@@ -84,6 +88,8 @@ PYEOF
 
 export EVAL_UNDER_REPO_SLUG EVAL_UNDER_SRC_DIR
 export EVAL_UNDER_GIT_REF EVAL_UNDER_PJDFSTEST_REF
+export EVAL_UNDER_DATALAD_REF EVAL_UNDER_DATALAD_DEPRECATED_REF
+export EVAL_UNDER_ASV_REF EVAL_UNDER_ASV_RUNNER_REF
 
 # Filename-safe identifier for a backend cell: "beegfs-7.4.6", "nfs",
 # "loop-vfat".

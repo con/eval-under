@@ -16,12 +16,15 @@
 #   bin/ci/install-target.sh <target>
 #
 #   target = git-annex | git-annex-linkannex | git | stress-ng
-#            | mtime-stability | pjdfstest
+#            | mtime-stability | pjdfstest | datalad-benchmarks
 #
 # env overrides:
 #   EVAL_UNDER_SRC_DIR         where to clone/build   (/opt/eval-under-src)
 #   EVAL_UNDER_GIT_REF         git tag to build       (see bin/ci/matrix.sh)
 #   EVAL_UNDER_PJDFSTEST_REF   pjdfstest tag to build (see bin/ci/matrix.sh)
+#   EVAL_UNDER_DATALAD_REF     DataLad release whose PyPI sdist to install
+#   EVAL_UNDER_DATALAD_DEPRECATED_REF, EVAL_UNDER_ASV_REF,
+#   EVAL_UNDER_ASV_RUNNER_REF  versions installed next to it
 #
 # Idempotent enough for CI re-runs: an already-built tree is left alone.
 
@@ -56,6 +59,11 @@ apt_update() {
     sudo apt-get "${APT_LOCK_TIMEOUT[@]}" update -qq
 }
 
+own_src_dir() {
+    sudo mkdir -p "$EVAL_UNDER_SRC_DIR"
+    sudo chown "$(id -u):$(id -g)" "$EVAL_UNDER_SRC_DIR"
+}
+
 # Shallow-fetch a pinned ref into $EVAL_UNDER_SRC_DIR/<name>, or report
 # that it is already there. Sets $checkout.
 #
@@ -71,8 +79,7 @@ fetch_pinned() {
         echo "I: $name already checked out at $checkout"
         return 0
     fi
-    sudo mkdir -p "$EVAL_UNDER_SRC_DIR"
-    sudo chown "$(id -u):$(id -g)" "$EVAL_UNDER_SRC_DIR"
+    own_src_dir
     echo "I: fetching $url @ $ref -> $checkout"
     mkdir -p "$checkout"
     git -C "$checkout" init -q
@@ -140,8 +147,60 @@ install_pjdfstest() {
     test -x "$checkout/pjdfstest"
 }
 
+# DataLad from its release sdist, into a venv of its own, with the
+# sdist also unpacked next to it: the benchmarks/ directory
+# bin/ci/target-datalad-benchmarks.sh runs ships in that tarball, not in
+# the installed package. Only the four packages named here are pinned;
+# DataLad's own dependencies resolve at install time, so the resolved
+# set is printed for the record.
+install_datalad_benchmarks() {
+    local ver="$EVAL_UNDER_DATALAD_REF"
+    local sdist="$EVAL_UNDER_SRC_DIR/datalad-$ver.tar.gz"
+    local src="$EVAL_UNDER_SRC_DIR/datalad"
+    local venv="$EVAL_UNDER_SRC_DIR/datalad-venv"
+    local pins=("datalad-deprecated==$EVAL_UNDER_DATALAD_DEPRECATED_REF"
+                "asv==$EVAL_UNDER_ASV_REF"
+                "asv-runner==$EVAL_UNDER_ASV_RUNNER_REF")
+    local stamp
+    stamp="$(printf '%s\n' "datalad==$ver" "${pins[@]}")"
+
+    # Written last, so it also stands for "the install finished".
+    if [ "$(cat "$venv/eval-under-pins" 2>/dev/null)" = "$stamp" ]; then
+        echo "I: datalad $ver benchmarks already installed ($venv)"
+        return 0
+    fi
+    apt_update
+    # ubuntu's python3 has no ensurepip, hence no `-m venv`, without it
+    apt_install python3-venv
+
+    own_src_dir
+    # files.pythonhosted.org's /packages/source/ path is PyPI's stable
+    # redirect to a release's sdist by name and version.
+    echo "I: fetching datalad $ver sdist from PyPI"
+    curl -fsSL --retry 3 -o "$sdist" \
+        "https://files.pythonhosted.org/packages/source/d/datalad/datalad-$ver.tar.gz"
+    rm -rf "$src"
+    mkdir -p "$src"
+    tar -xzf "$sdist" -C "$src" --strip-components=1
+    test -d "$src/benchmarks" || {
+        echo "ERROR: datalad $ver sdist carries no benchmarks/" >&2
+        exit 3
+    }
+
+    rm -rf "$venv"
+    python3 -m venv "$venv"
+    "$venv/bin/pip" install -q --upgrade pip
+    # The tarball itself rather than datalad==$ver, which pip could
+    # equally satisfy from the wheel.
+    "$venv/bin/pip" install -q "$sdist" "${pins[@]}"
+    "$venv/bin/pip" freeze --all | sed 's/^/I: installed /'
+    "$venv/bin/datalad" --version
+    echo "$stamp" > "$venv/eval-under-pins"
+}
+
 case "$TARGET" in
     git-annex|git-annex-linkannex) install_git_annex ;;
+    datalad-benchmarks) install_datalad_benchmarks ;;
     # mtime-stability ships with this repo and needs nothing installed
     mtime-stability) ;;
     git)       install_git ;;

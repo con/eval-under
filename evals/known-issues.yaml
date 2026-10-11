@@ -17,6 +17,9 @@
 #               stress-ng  utime
 #               git-annex  Tests.Repo Tests v10 unlocked.Init Tests.add
 #                          (as `git annex test --list-tests` prints them)
+#               datalad-benchmarks
+#                          api.supers.time_ls, or with its parameters
+#                          save_run.save_since_flat.time_save_since(5)
 #             A TAP script also reports <file>#plan, <file>#exit or
 #             <file>#bailout when it dies, and a bare <file> when it
 #             skips everything. Only a literal id or "*" matches those

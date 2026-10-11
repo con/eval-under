@@ -1,0 +1,46 @@
+{
+ "core.startup.time_import": {
+  "name": "core.startup.time_import",
+  "param_names": [],
+  "params": [],
+  "type": "time",
+  "unit": "seconds"
+ },
+ "core.startup.time_import_api": {
+  "name": "core.startup.time_import_api",
+  "param_names": [],
+  "params": [],
+  "type": "time",
+  "unit": "seconds"
+ },
+ "plugins.addurls.addurls1.time_addurls": {
+  "name": "plugins.addurls.addurls1.time_addurls",
+  "param_names": [
+   "exclude_metadata"
+  ],
+  "params": [
+   [
+    "None",
+    "'*'"
+   ]
+  ],
+  "type": "time",
+  "unit": "seconds"
+ },
+ "save_run.save_since_flat.time_save_since": {
+  "name": "save_run.save_since_flat.time_save_since",
+  "param_names": [
+   "n_inner_commits"
+  ],
+  "params": [
+   [
+    "1",
+    "5",
+    "20"
+   ]
+  ],
+  "type": "time",
+  "unit": "seconds"
+ },
+ "version": 2
+}

@@ -1,0 +1,9 @@
+{
+    "arch": "x86_64",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "machine": "loop-ext4",
+    "num_cpu": "4",
+    "os": "Linux 6.18.44-fc-v114",
+    "ram": "16479424",
+    "version": 1
+}

@@ -17,7 +17,7 @@
 #   version = for beegfs: point release (e.g. 7.4.6, 8.1.0)
 #             for loop:   filesystem type (e.g. vfat, ext4)
 #             for nfs:    literal "n/a"
-#   target  = git-annex (default) | git | stress-ng | pjdfstest
+#   target  = git-annex (default), or any other target in evals/matrix.yaml
 #
 # env overrides:
 #   EVAL_UNDER_TIMEOUT         seconds for the wrapped suite
@@ -51,6 +51,8 @@ target_known "$TARGET" || {
 export EVAL_UNDER_SRC_DIR
 
 TIMEOUT="${EVAL_UNDER_TIMEOUT:-$(target_timeout "$TARGET")}"
+# Also to the target, which may want to stop itself in time to report.
+export EVAL_UNDER_TIMEOUT="$TIMEOUT"
 
 opts=()
 case "$BACKEND" in
@@ -72,6 +74,12 @@ echo "I: $(target_label "$TARGET") under $BACKEND/$VERSION (timeout ${TIMEOUT}s)
 
 out="$(cell_output_dir "$BACKEND" "$VERSION" "$TARGET")"
 mkdir -p "$out"
+# For a target with more to keep than its stdout, such as the asv JSON
+# of target-datalad-benchmarks.sh: a place off the mount, which the
+# workflow uploads, and a name for the backend to file it under.
+export EVAL_UNDER_OUTPUT_DIR="$out"
+EVAL_UNDER_BACKEND_SLUG="$(backend_slug "$BACKEND" "$VERSION")"
+export EVAL_UNDER_BACKEND_SLUG
 rm -f "$out/suite.rc" "$out/verdict.json"
 # We run under sudo, but the checker that adds to $out runs as the
 # invoking user. No recursive chown: $out may be an override

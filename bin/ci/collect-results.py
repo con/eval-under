@@ -215,10 +215,11 @@ def collect_stress_ng(lines: list[str]) -> list[Row]:
 def collect_tap_target(name: str, lines: list[str]) -> list[Row]:
     """From the TAP a target prints itself, ids taken from the description.
 
-    Shared by mtime-stability and git-annex-linkannex: both print a short
-    fixed plan whose descriptions start with a stable slug, so a known
-    issue can name "mtime-stable" or "add-unlocked" rather than a round
-    number that means nothing on the next run.
+    Shared by mtime-stability, git-annex-linkannex and datalad-benchmarks:
+    each prints a plan whose descriptions start with a stable slug, so a
+    known issue can name "mtime-stable", "add-unlocked" or
+    "api.supers.time_ls" rather than a round or point number that means
+    nothing on the next run.
     """
     tf = TapFile(name)
     for ln in lines:
@@ -361,6 +362,8 @@ def main() -> int:
         "mtime-stability": lambda lines: collect_tap_target("mtime-stability", lines),
         "git-annex-linkannex": lambda lines: collect_tap_target(
             "git-annex-linkannex", lines),
+        "datalad-benchmarks": lambda lines: collect_tap_target(
+            "datalad-benchmarks", lines),
     }
     log = a.cell_dir / "suite.log"
     rows, reason = [], ""
